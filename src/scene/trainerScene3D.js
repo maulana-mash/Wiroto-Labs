@@ -1401,21 +1401,26 @@ export class TrainerScene3D {
     }
 
     // Stand geometry constants
-    const SHELF_TOP_Y = -7.0;
+    const isFig06 = Boolean(this.module?.id === 'fig06');
+    const SHELF_TOP_Y = isFig06 ? -8.5 : -7.0;
     const SHELF_THICK = 0.35;
     const SHELF_DEPTH = 5.0;
     const SHELF_Z = 2.0;
 
-    // Middle Tabletop Desk for AC Trainer (matching workbench table in Gambar 1)
-    if (isAc) {
-      const tableGeo = new THREE.BoxGeometry(boardWidth + 0.5, 0.38, 4.4);
-      const tableMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.55, metalness: 0.1 });
-      const table = new THREE.Mesh(tableGeo, tableMat);
-      table.position.set(0, -3.8, 1.8);
-      table.receiveShadow = true;
-      this._addInkedOutline(table, 0x334155, 0.8);
-      this.standGroup.add(table);
-    }
+    // Middle Tabletop Workbench Desk present on ALL trainers (Basic Electricity, Body, & AC)
+    const tableThickness = 0.38;
+    const tableY = isFig06 ? -5.84 : -3.8;
+    const tableGeo = new THREE.BoxGeometry(boardWidth + 0.5, tableThickness, 4.4);
+    const tableMat = new THREE.MeshStandardMaterial({
+      color: isAc ? 0xcccccc : 0xd1d5db,
+      roughness: 0.55,
+      metalness: 0.1,
+    });
+    const table = new THREE.Mesh(tableGeo, tableMat);
+    table.position.set(0, tableY, 1.8);
+    table.receiveShadow = true;
+    this._addInkedOutline(table, 0x334155, 0.8);
+    this.standGroup.add(table);
 
     // Left & Right vertical steel pillars & wheeled trolley base
     const pillarX = boardWidth / 2 - 0.5;
@@ -1479,12 +1484,11 @@ export class TrainerScene3D {
     // 3D wire storage rack standing on the right side of the shelf
     this._build3DWireRackOnShelf(Math.min(6.2, boardWidth * 0.28), SHELF_TOP_Y);
 
-    // 3D Digital Multimeter unit sitting on the shelf (or middle tabletop desk for AC Trainer)
-    if (isAc) {
-      this._build3DMultimeterOnShelf(7.8, -3.61, 2.2);
-    } else {
-      this._build3DMultimeterOnShelf(Math.min(1.0, boardWidth * 0.05), SHELF_TOP_Y, 1.05);
-    }
+    // 3D Digital Multimeter unit sitting on the middle tabletop workbench
+    const tableTopY = isFig06 ? -5.65 : -3.61;
+    const mmX = isAc ? 7.8 : (isFig06 ? 1.5 : Math.min(6.8, boardWidth * 0.32));
+    const mmZ = isAc ? 2.2 : 2.0;
+    this._build3DMultimeterOnShelf(mmX, tableTopY, mmZ);
   }
 
   _buildAcRefrigerationEquipment(shelfTopY) {
@@ -4165,7 +4169,9 @@ export class TrainerScene3D {
     // ASYMMETRIC CATENARY & BERNSTEIN ORDE-5 STRAIN-RELIEF ENGINE
     // Works flawlessly for Board-to-Board (horizontal & steep vertical) & Desk-to-Board
     // -------------------------------------------------------------------------
-    const deskY = options.deskClearanceY ?? -3.45;
+    const isFig06 = Boolean(this.module?.id === 'fig06');
+    const defaultDeskY = isFig06 ? -5.50 : -3.45;
+    const deskY = options.deskClearanceY ?? defaultDeskY;
     const numSegments = options.segments ?? 24;
 
     const chordVec = new THREE.Vector3().subVectors(endVec, startVec);
@@ -4290,8 +4296,13 @@ export class TrainerScene3D {
       let finalZ = pz + exitOffsetZ + bellyZ;
 
       // D. Smooth Tabletop Desk Clearance Protection
+      const minPinY = Math.min(startVec.y, endVec.y);
+      const pinFloorBound = (startVec.y >= deskY && endVec.y >= deskY)
+        ? deskY
+        : Math.min(deskY, minPinY);
+
       const endpointPinLock = Math.sin(Math.PI * u);
-      const effectiveFloorY = THREE.MathUtils.lerp(Math.min(startVec.y, endVec.y, deskY), deskY, endpointPinLock);
+      const effectiveFloorY = THREE.MathUtils.lerp(minPinY, pinFloorBound, endpointPinLock);
       const clampedY = this._smoothFloorClamp(rawY, effectiveFloorY, 15.0);
 
       const floorCompression = Math.max(0.0, clampedY - rawY);
@@ -4850,8 +4861,10 @@ export class TrainerScene3D {
       this.camera.position.set(9.8, -5.2, frontZ - 2.2);
       this.controls.target.set(0.3, -1.8, 0.8);
     } else if (presetName === 'battery') {
-      this.camera.position.set(-6.5, -2.8, 10.5);
-      this.controls.target.set(-6.8, -5.6, 2.2);
+      const isFig06 = Boolean(this.module?.id === 'fig06');
+      const batTargetY = isFig06 ? -4.7 : -2.66;
+      this.camera.position.set(-6.5, batTargetY + 1.2, 10.5);
+      this.controls.target.set(isFig06 ? -8.8 : -8.5, batTargetY, 2.2);
     }
     this.controls.update();
   }

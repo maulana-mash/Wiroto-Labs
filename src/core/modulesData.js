@@ -15,34 +15,40 @@ function makePin(id, label, componentId, x, y, z = 0.45, color = 'red', terminal
   };
 }
 
-const COMMON_BATTERY_COMPONENT = {
-  id: 'ACCU_12V',
-  type: 'battery_12v',
-  title: 'Aki 12V',
-  subtitle: 'Rak Bawah Trainer',
-  pos: [-7.0, -6.0, 2.2],
-  size: [4.6, 2.0, 2.4],
-};
-
-// Battery posts sit on the top face of the battery (Y = -5.0), toward the front edge.
-const COMMON_BATTERY_PINS = [
-  makePin('BAT_POS', 'AKI +', 'ACCU_12V', -5.5, -5.0, 2.8, 'red', 'battery_post'),
-  makePin('BAT_NEG', 'AKI -', 'ACCU_12V', -8.5, -5.0, 2.8, 'black', 'battery_post'),
-];
-
-// Battery for AC Trainer sits cleanly ON the middle tabletop desk (Y = -2.66), completely separated from lower engine/motor
-const AC_BATTERY_COMPONENT = {
+// Battery for standard trainers (Fig. 00 - Fig. 05 & AC) sits cleanly on middle tabletop desk (top surface at Y = -3.61)
+const TABLE_BATTERY_COMPONENT = {
   id: 'ACCU_12V',
   type: 'battery_12v',
   title: 'Aki 12V 45Ah',
-  subtitle: 'Meja Trainer AC',
+  subtitle: 'Meja Trainer',
   pos: [-8.5, -2.66, 2.2],
   size: [3.8, 1.9, 2.2],
 };
 
-const AC_BATTERY_PINS = [
+const TABLE_BATTERY_PINS = [
   makePin('BAT_POS', 'AKI +', 'ACCU_12V', -7.5, -1.6, 2.6, 'red', 'battery_post'),
   makePin('BAT_NEG', 'AKI -', 'ACCU_12V', -9.5, -1.6, 2.6, 'black', 'battery_post'),
+];
+
+const COMMON_BATTERY_COMPONENT = TABLE_BATTERY_COMPONENT;
+const COMMON_BATTERY_PINS = TABLE_BATTERY_PINS;
+
+const AC_BATTERY_COMPONENT = TABLE_BATTERY_COMPONENT;
+const AC_BATTERY_PINS = TABLE_BATTERY_PINS;
+
+// Battery for Fig. 06 Full Body Trainer sits cleanly on Fig. 06 middle workbench table (top surface at Y = -5.65)
+const FIG06_BATTERY_COMPONENT = {
+  id: 'ACCU_12V',
+  type: 'battery_12v',
+  title: 'Aki 12V 45Ah',
+  subtitle: 'Meja Trainer Bodi',
+  pos: [-8.8, -4.70, 2.2],
+  size: [3.8, 1.9, 2.2],
+};
+
+const FIG06_BATTERY_PINS = [
+  makePin('BAT_POS', 'AKI +', 'ACCU_12V', -7.8, -3.65, 2.6, 'red', 'battery_post'),
+  makePin('BAT_NEG', 'AKI -', 'ACCU_12V', -9.8, -3.65, 2.6, 'black', 'battery_post'),
 ];
 
 export const MODULES = [
@@ -59,7 +65,7 @@ export const MODULES = [
     description:
       'Laboratorium dasar kelistrikan otomotif komprehensif. Siswa mempelajari pembuktian Hukum Ohm, karakteristik beban resistor murni (10Ω, 50Ω, 100Ω), perbedaan resistansi filamen bohlam (5W, 21W, 55W H4), pengujian polaritas diode LED dan buzzer piezo, simulasi motor washer, serta pengoperasian Multimeter Digital untuk mengukur tegangan DC, resistansi Ohm, dan kontinuitas buzzer.',
     components: [
-      COMMON_BATTERY_COMPONENT,
+      TABLE_BATTERY_COMPONENT,
       {
         id: 'PWR_BUS_30',
         type: 'power_rail',
@@ -301,7 +307,7 @@ export const MODULES = [
     description:
       'Setiap rangkaian kelistrikan bodi mobil berawal dari Aki 12V di rak bawah menuju terminal distribusi papan, melewati Kunci Kontak (B ke IG) dan Sekring (Fuse) sebelum menyuplai saklar serta beban lampu. Jika terminal keluaran sekring dihubungkan langsung ke Ground tanpa beban, sekring akan langsung putus (blown) untuk mencegah kebakaran kabel.',
     components: [
-      COMMON_BATTERY_COMPONENT,
+      TABLE_BATTERY_COMPONENT,
       {
         id: 'PWR_TERMINAL',
         type: 'power_rail',
@@ -428,7 +434,7 @@ export const MODULES = [
     description:
       'Klakson membutuhkan arus tinggi sehingga jika dialirkan langsung ke tombol setir, kontak tombol cepat aus/terbakar. Relay 4-kaki menggunakan kumparan elektromagnetik (pin 85 dan 86) berarus kecil untuk menarik plat kontak utama (pin 30 ke 87) yang mengalirkan arus besar langsung dari sekring ke klakson.',
     components: [
-      COMMON_BATTERY_COMPONENT,
+      TABLE_BATTERY_COMPONENT,
       {
         id: 'PWR_TERMINAL',
         type: 'power_rail',
@@ -575,7 +581,7 @@ export const MODULES = [
     description:
       'Lampu belakang mobil umumnya memiliki dua filamen dalam satu rumah lampu: Lampu Kota/Senja (5W) yang dinyalakan melalui saklar lampu utama posisi TAIL, dan Lampu Rem (21W) yang menyala terang saat pengemudi menginjak pedal rem.',
     components: [
-      COMMON_BATTERY_COMPONENT,
+      TABLE_BATTERY_COMPONENT,
       {
         id: 'PWR_TERMINAL',
         type: 'power_rail',
@@ -713,7 +719,7 @@ export const MODULES = [
     description:
       'Lampu kepala (Headlamp H4) memiliki filamen Dekat (Low Beam 55W) dan Jauh (High Beam 60W). Dua buah relay 4-kaki digunakan agar arus besar lampu kiri dan kanan tidak membebani saklar kombinasi Dimmer di batang kemudi.',
     components: [
-      COMMON_BATTERY_COMPONENT,
+      TABLE_BATTERY_COMPONENT,
       {
         id: 'PWR_TERMINAL',
         type: 'power_rail',
@@ -885,7 +891,7 @@ export const MODULES = [
     description:
       'Unit Flasher memiliki 3 terminal: B (Battery +12V), E (Earth/Ground), dan L (Load/keluaran pulsa kedip ~85 kedipan/menit). Keluaran L dihubungkan ke input tengah saklar sein (untuk mengedipkan sisi Kiri atau Kanan) serta saklar Hazard (untuk mengedipkan keempat lampu sein secara bersamaan).',
     components: [
-      COMMON_BATTERY_COMPONENT,
+      TABLE_BATTERY_COMPONENT,
       {
         id: 'PWR_TERMINAL',
         type: 'power_rail',
@@ -1043,7 +1049,7 @@ export const MODULES = [
     description:
       'Master Trainer Kelistrikan Penerangan Bodi: Baris atas memuat Sign-Tail Lamp Kiri/Kanan, Head Lamp Kiri/Kanan, serta Wiper & Klakson. Baris tengah memuat Saklar Klakson, Saklar Rem, Indicator Lamp, Interior Lamp, Flasher, dan 3 Relay. Baris bawah memuat Lampu Kombinasi Belakang Kiri/Kanan, Licence Lamp, Terminal Aki, Kunci Kontak, Blok 4 Sekring (F1-F4), dan Saklar Kombinasi.',
     components: [
-      COMMON_BATTERY_COMPONENT,
+      FIG06_BATTERY_COMPONENT,
       // --- ROW 1 (TOP ROW: y = 3.55, h = 2.15, bottom pins at y = 2.70) ---
       {
         id: 'SIGN_FRONT_LH',
@@ -1255,7 +1261,7 @@ export const MODULES = [
       },
     ],
     pins: [
-      ...COMMON_BATTERY_PINS,
+      ...FIG06_BATTERY_PINS,
       // Row 1 bottom pins (y = 2.70)
       makePin('LAMP_LH_POS', 'LH+', 'SIGN_FRONT_LH', -10.1, 2.7, 0.45, 'yellow'),
       makePin('FD_LH_GND', 'GND', 'SIGN_FRONT_LH', -8.9, 2.7, 0.45, 'black'),
