@@ -1,10 +1,10 @@
-import { CABLE_TYPES, CableManager } from './core/cableEngine.js?v=20261117_02';
-import { MODULES, getModuleById } from './core/modulesData.js?v=20261117_02';
-import { CircuitSolver } from './core/circuitSolver.js?v=20261117_02';
-import { SoundEngine } from './audio/soundEngine.js?v=20261117_02';
-import { TrainerScene3D } from './scene/trainerScene3D.js?v=20261117_02';
-import { ComponentInspector3D, INSPECTOR_COMPONENTS } from './scene/componentInspector3D.js?v=20261117_02';
-import { MULTIMETER_MODES, MultimeterEngine } from './core/multimeterEngine.js?v=20261117_02';
+import { CABLE_TYPES, CableManager } from './core/cableEngine.js?v=20261117_03';
+import { MODULES, getModuleById } from './core/modulesData.js?v=20261117_03';
+import { CircuitSolver } from './core/circuitSolver.js?v=20261117_03';
+import { SoundEngine } from './audio/soundEngine.js?v=20261117_03';
+import { TrainerScene3D } from './scene/trainerScene3D.js?v=20261117_03';
+import { ComponentInspector3D, INSPECTOR_COMPONENTS } from './scene/componentInspector3D.js?v=20261117_03';
+import { MULTIMETER_MODES, MultimeterEngine } from './core/multimeterEngine.js?v=20261117_03';
 
 // Short sidebar group names (full category text stays in module data)
 const GROUP_SHORT = {

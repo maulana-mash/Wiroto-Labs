@@ -4025,22 +4025,82 @@ export class TrainerScene3D {
     };
   }
 
-  _buildCatenaryCurve(startVec, endVec, maxLengthCm, distanceCm) {
+  // ============================================================================
+  // CATHEDRAL & ASYMMETRIC CATENARY PHYSICS ENGINE FOR 3D JUMPER WIRES
+  // ============================================================================
+
+  _bernstein5(t) {
+    const u = 1.0 - t;
+    const u2 = u * u;
+    const u3 = u2 * u;
+    const t2 = t * t;
+    const t3 = t2 * t;
+    return {
+      b0: u3 * u2,
+      b1: 5.0 * t * u2 * u2,
+      b2: 10.0 * t2 * u3,
+      b3: 10.0 * t3 * u2,
+      b4: 5.0 * t2 * t2 * u,
+      b5: t3 * t2,
+    };
+  }
+
+  _normalizedCatenary(u, kappa = 1.65) {
+    const x = 2.0 * u - 1.0;
+    const coshK = Math.cosh(kappa);
+    const denom = coshK - 1.0;
+    if (denom < 1e-6) {
+      return 4.0 * u * (1.0 - u);
+    }
+    return (coshK - Math.cosh(kappa * x)) / denom;
+  }
+
+  _smoothFloorClamp(y, floorY, sharpness = 14.0) {
+    const diff = y - floorY;
+    if (diff > 0.65) return y;
+    if (diff < -0.65) return floorY;
+    return floorY + Math.log(1.0 + Math.exp(sharpness * diff)) / sharpness;
+  }
+
+  _resolveTerminalNormal(pinVec, otherVec, explicitNormal, options = {}) {
+    if (explicitNormal && explicitNormal.isVector3) {
+      return explicitNormal.clone().normalize();
+    }
+    const deskY = options.deskClearanceY ?? -3.45;
+    const isNearDesk = pinVec.y < deskY + 1.15;
+    const isProtrudingForward = (pinVec.z - otherVec.z) > 0.35 || pinVec.z > 0.45;
+    const isBattery = Boolean(
+      pinVec.isBattery ||
+      pinVec.terminalType === 'battery_post' ||
+      pinVec.userData?.isBattery ||
+      (isNearDesk && isProtrudingForward)
+    );
+
+    // Battery terminals on the workbench desk: exit ascending upward (+Y) and softly forward (+Z)
+    if (isBattery) {
+      return new THREE.Vector3(0.0, 0.78, 0.62).normalize();
+    }
+
+    // Board sockets close to tabletop desk: slight upward tilt to prevent table clipping
+    const floorDist = pinVec.y - deskY;
+    if (floorDist < 0.55) {
+      const pitchUp = THREE.MathUtils.clamp((0.55 - floorDist) * 0.45, 0.0, 0.28);
+      return new THREE.Vector3(0.0, pitchUp, 1.0).normalize();
+    }
+
+    // Standard trainer board sockets: exit pure perpendicular front (+Z)
+    return new THREE.Vector3(0.0, 0.0, 1.0);
+  }
+
+  _buildCatenaryCurve(startVec, endVec, maxLengthCm = 30, distanceCm = null, options = {}) {
     const isUnderExplode = this.explodeProgress > 0.02;
-    const spanDist = startVec.distanceTo(endVec);
-    const excessCm = Math.max(0, maxLengthCm - distanceCm);
+    const excessCm = Math.max(0, maxLengthCm - (distanceCm || 15));
     const excessUnits = excessCm / 2.5;
 
-    // Detect if this wire connects the lower shelf or tabletop desk (Battery / Multimeter) to the upper board
+    // Detect if this wire connects the lower shelf to the upper board
     const isShelfToBoard =
       (startVec.y < -4.2 && endVec.y >= -4.2) ||
       (endVec.y < -4.2 && startVec.y >= -4.2);
-
-    const isDeskToBoard =
-      !isShelfToBoard &&
-      ((startVec.z > 1.5 && endVec.z < 1.0) ||
-       (endVec.z > 1.5 && startVec.z < 1.0) ||
-       Math.abs(startVec.z - endVec.z) > 1.1);
 
     if (isUnderExplode) {
       // EXPLODED 3D MODE: Route cables UNDERNEATH the lifted 3D components
@@ -4063,7 +4123,7 @@ export class TrainerScene3D {
         THREE.MathUtils.lerp(endVec.z, underZ, 0.75)
       );
 
-      if (!isShelfToBoard && !isDeskToBoard) {
+      if (!isShelfToBoard) {
         p1.y = Math.max(-3.45, p1.y);
         pMid.y = Math.max(-3.45, pMid.y);
         p2.y = Math.max(-3.45, p2.y);
@@ -4072,64 +4132,21 @@ export class TrainerScene3D {
       return new THREE.CatmullRomCurve3([startVec, p1, pMid, p2, endVec]);
     }
 
-    if (isDeskToBoard) {
-      // DESK-TO-BOARD CABLE (Aki 12V 45Ah on workbench table to Upper Board):
-      // Natural, elegant weighted gravity loop - exits alligator boot upward (+Y),
-      // drapes gracefully forward (+Z) over the table edge, and ascends smoothly to the board pin.
-      const pDesk = startVec.z > endVec.z ? startVec : endVec;
-      const pBoard = startVec.z > endVec.z ? endVec : startVec;
-
-      // Waypoint 1: Arcing naturally up and slightly forward out of the vertical alligator clip
-      const w1 = new THREE.Vector3(
-        pDesk.x + (pBoard.x - pDesk.x) * 0.10,
-        pDesk.y + 0.55,
-        pDesk.z + 0.35
-      );
-
-      // Waypoint 2: Gravitational drape looping softly forward above the tabletop desk
-      const sagDesk = 0.45 + Math.min(0.60, excessUnits * 0.08);
-      const w2 = new THREE.Vector3(
-        THREE.MathUtils.lerp(pDesk.x, pBoard.x, 0.42),
-        Math.max(-3.45, Math.min(pDesk.y, pBoard.y) - sagDesk),
-        Math.max(pDesk.z, 2.7) + 0.32 + Math.min(0.40, excessUnits * 0.04)
-      );
-
-      // Waypoint 3: Ascending smoothly towards the upper board target pin
-      const w3 = new THREE.Vector3(
-        THREE.MathUtils.lerp(pDesk.x, pBoard.x, 0.78),
-        THREE.MathUtils.lerp(w2.y, pBoard.y, 0.65),
-        THREE.MathUtils.lerp(w2.z, pBoard.z + 0.45, 0.72)
-      );
-
-      const pts =
-        startVec.z > endVec.z
-          ? [pDesk, w1, w2, w3, pBoard]
-          : [pBoard, w3, w2, w1, pDesk];
-
-      return new THREE.CatmullRomCurve3(pts);
-    }
-
     if (isShelfToBoard) {
       // LOWER SHELF-TO-BOARD CABLE:
-      // Route smoothly from lower shelf up to upper board without penetrating the tabletop desk (Y = -3.61)
       const pLower = startVec.y < endVec.y ? startVec : endVec;
       const pUpper = startVec.y < endVec.y ? endVec : startVec;
 
-      // Waypoint 1: Arcing forward from lower post/jack
       const w1 = new THREE.Vector3(
         THREE.MathUtils.lerp(pLower.x, pUpper.x, 0.25),
         pLower.y + 0.8,
         Math.max(pLower.z + 0.35, 3.4)
       );
-
-      // Waypoint 2: Passing front perimeter of the middle table desk (table surface at Y = -3.61, Z = 1.8..4.0)
       const w2 = new THREE.Vector3(
         THREE.MathUtils.lerp(pLower.x, pUpper.x, 0.5),
         -3.3,
         Math.max(3.8, Math.max(pLower.z, pUpper.z) + 0.5)
       );
-
-      // Waypoint 3: Rising towards the upper board, transitioning towards board Z
       const w3 = new THREE.Vector3(
         THREE.MathUtils.lerp(pLower.x, pUpper.x, 0.8),
         THREE.MathUtils.lerp(-3.3, pUpper.y, 0.65),
@@ -4141,39 +4158,155 @@ export class TrainerScene3D {
           ? [pLower, w1, w2, w3, pUpper]
           : [pUpper, w3, w2, w1, pLower];
 
-      return new THREE.CatmullRomCurve3(pts);
+      return new THREE.CatmullRomCurve3(pts, false, 'centripetal', 0.5);
     }
 
-    // JUMPERS ON THE BOARD (Board-to-Board):
-    // Authentic, elegant catenary sag with STRICT DESK COLLISION CLAMPING.
-    // Tabletop desk top surface is at Y = -3.61.
-    // We enforce an absolute floor at Y = -3.45 so wires NEVER penetrate into the table or shelf!
-    const DESK_CLEARANCE_Y = -3.45;
+    // -------------------------------------------------------------------------
+    // ASYMMETRIC CATENARY & BERNSTEIN ORDE-5 STRAIN-RELIEF ENGINE
+    // Works flawlessly for Board-to-Board (horizontal & steep vertical) & Desk-to-Board
+    // -------------------------------------------------------------------------
+    const deskY = options.deskClearanceY ?? -3.45;
+    const numSegments = options.segments ?? 24;
+
+    const chordVec = new THREE.Vector3().subVectors(endVec, startVec);
+    const worldDist = chordVec.length();
+
+    if (worldDist < 1e-4) {
+      const tinyStub = startVec.clone().add(new THREE.Vector3(0, 0, 0.18));
+      return new THREE.CatmullRomCurve3([startVec.clone(), tinyStub, endVec.clone()]);
+    }
+
+    // 1. World scale calibration & Real Cable Slack calculation
+    const hasValidDistCm = typeof distanceCm === 'number' && distanceCm > 0.1;
+    const cmToWorld = hasValidDistCm
+      ? THREE.MathUtils.clamp(worldDist / distanceCm, 0.03, 0.30)
+      : 0.10;
+
+    const effDistanceCm = hasValidDistCm ? distanceCm : (worldDist / cmToWorld);
+    const nominalCableCm = (typeof maxLengthCm === 'number' && maxLengthCm > 0)
+      ? maxLengthCm
+      : Math.max(30, effDistanceCm * 1.25);
+
+    const rawExcessCm = Math.max(0.0, nominalCableCm - effDistanceCm);
+    const minElasticFlexCm = Math.min(4.2, effDistanceCm * 0.11);
+    const effectiveExcessCm = Math.sqrt(rawExcessCm * rawExcessCm + minElasticFlexCm * minElasticFlexCm);
+    const excessWorld = effectiveExcessCm * cmToWorld;
+    const rawExcessWorld = rawExcessCm * cmToWorld;
+    const slackRatio = effectiveExcessCm / Math.max(effDistanceCm, 8.0);
+
+    // 2. Geometry Span Decomposition
+    const dx = chordVec.x;
+    const dy = chordVec.y;
+    const dz = chordVec.z;
+    const absDy = Math.abs(dy);
+
+    const verticality = THREE.MathUtils.clamp(absDy / worldDist, 0.0, 1.0);
+    const elevationSkew = THREE.MathUtils.clamp(dy / worldDist, -1.0, 1.0);
+
+    // 3. Banana Plug Exit Normal Vectors (~0.18 - 0.25 unit perpendicular)
+    const nStart = this._resolveTerminalNormal(startVec, endVec, options.startNormal, options);
+    const nEnd = this._resolveTerminalNormal(endVec, startVec, options.endNormal, options);
+
+    const targetBootExit = THREE.MathUtils.clamp(worldDist * 0.16, 0.18, 0.25);
+    const bootExitDist = Math.min(targetBootExit, worldDist * 0.42);
+
+    const archForwardBase = THREE.MathUtils.clamp(
+      bootExitDist + 0.12 + Math.tanh(slackRatio * 0.85) * 0.16 + verticality * 0.08,
+      bootExitDist + 0.06,
+      0.52
+    );
+
+    const startArchDist = archForwardBase * (1.0 + 0.35 * nStart.y);
+    const endArchDist = archForwardBase * (1.0 + 0.35 * nEnd.y);
+
+    // 4. Gravity Sag (Y) & Forward Belly (Z) Amplitudes
+    const totalDeflection = 0.48 * Math.sqrt(worldDist * excessWorld) + 0.30 * excessWorld;
+    const horizSagFactor = 1.0 - 0.64 * Math.pow(verticality, 1.45);
+    const verticalLoopAllowance = 0.38 * rawExcessWorld * Math.pow(verticality, 1.45);
+    let sagAmplitudeY = totalDeflection * horizSagFactor + verticalLoopAllowance;
+
+    // Relative to chord line: ensure belly never sags unnaturally below physical limits
     const minPinY = Math.min(startVec.y, endVec.y);
+    const midChordY = 0.5 * (startVec.y + endVec.y);
+    const maxDropBelowLowestPin = 0.48 * rawExcessWorld + 0.14 * (1.0 - 0.5 * verticality);
+    const maxAllowedSagAtMid = Math.max(0.10, (midChordY - minPinY) + maxDropBelowLowestPin);
+    sagAmplitudeY = Math.min(sagAmplitudeY, maxAllowedSagAtMid);
 
-    // Natural gravity sag based on slack and span
-    const naturalSag = 0.10 + Math.min(0.60, excessUnits * 0.07 + spanDist * 0.035);
+    const extraBellyZ = THREE.MathUtils.clamp(
+      (0.08 + 0.18 * Math.tanh(slackRatio * 0.9) + 0.10 * verticality) * Math.min(1.0, worldDist / 1.2),
+      0.04,
+      0.32
+    );
 
-    // Maximum allowed sag before touching the desk
-    const maxDropBeforeDesk = Math.max(0.04, minPinY - DESK_CLEARANCE_Y);
-    const sagY = -Math.min(naturalSag, maxDropBeforeDesk);
+    const horizSpanX = Math.abs(dx);
+    const microSwayX = (horizSpanX < 0.35 && verticality > 0.75)
+      ? (startVec.x >= 0 ? 1.0 : -1.0) * THREE.MathUtils.clamp((0.35 - horizSpanX) * 0.12, 0.0, 0.045)
+      : 0.0;
 
-    // Gentle forward arc in Z to ensure wires float gracefully in front of the board
-    const forwardArcZ = 0.16 + Math.min(0.40, excessUnits * 0.045);
+    const catenaryKappa = 1.35 + Math.min(1.15, slackRatio * 0.85);
 
-    const mid = new THREE.Vector3().addVectors(startVec, endVec).multiplyScalar(0.5);
-    mid.y = Math.max(DESK_CLEARANCE_Y, minPinY + sagY);
-    mid.z = Math.max(startVec.z, endVec.z) + forwardArcZ;
+    // 5. Sample Points along parameter t in [0, 1]
+    const points = [];
+    const alpha = 0.22;
 
-    const ctrl1 = new THREE.Vector3().lerpVectors(startVec, mid, 0.5);
-    ctrl1.y = Math.max(DESK_CLEARANCE_Y, THREE.MathUtils.lerp(startVec.y, mid.y, 0.65));
-    ctrl1.z = THREE.MathUtils.lerp(startVec.z, mid.z, 0.6);
+    for (let i = 0; i <= numSegments; i++) {
+      const t = i / numSegments;
 
-    const ctrl2 = new THREE.Vector3().lerpVectors(mid, endVec, 0.5);
-    ctrl2.y = Math.max(DESK_CLEARANCE_Y, THREE.MathUtils.lerp(endVec.y, mid.y, 0.65));
-    ctrl2.z = THREE.MathUtils.lerp(endVec.z, mid.z, 0.6);
+      if (i === 0) {
+        points.push(startVec.clone());
+        continue;
+      }
+      if (i === numSegments) {
+        points.push(endVec.clone());
+        continue;
+      }
 
-    return new THREE.CatmullRomCurve3([startVec, ctrl1, mid, ctrl2, endVec]);
+      const B = this._bernstein5(t);
+      const u = alpha * B.b2 + (1.0 - alpha) * B.b3 + B.b4 + B.b5;
+
+      // A. Position on 3D Chord Line
+      const px = startVec.x + u * dx;
+      const py = startVec.y + u * dy;
+      const pz = startVec.z + u * dz;
+
+      // B. Banana Plug Perpendicular Exit Normal Offset
+      const plugWeightStart = (bootExitDist * 1.35) * B.b1 + startArchDist * B.b2 + (0.38 * startArchDist) * B.b3;
+      const plugWeightEnd = (0.38 * endArchDist) * B.b2 + endArchDist * B.b3 + (bootExitDist * 1.35) * B.b4;
+
+      const exitOffsetX = plugWeightStart * nStart.x + plugWeightEnd * nEnd.x;
+      const exitOffsetY = plugWeightStart * nStart.y + plugWeightEnd * nEnd.y;
+      const exitOffsetZ = plugWeightStart * nStart.z + plugWeightEnd * nEnd.z;
+
+      // C. Asymmetric Catenary Gravity Sag & Forward Arc
+      const catVal = this._normalizedCatenary(u, catenaryKappa);
+      const gravityBias = 1.0 - 0.30 * elevationSkew * (2.0 * u - 1.0);
+      const sagY = -sagAmplitudeY * catVal * gravityBias;
+
+      const bellyZ = extraBellyZ * this._normalizedCatenary(u, 1.25);
+      const swayX = microSwayX * Math.sin(Math.PI * u);
+
+      let finalX = px + exitOffsetX + swayX;
+      let rawY = py + exitOffsetY + sagY;
+      let finalZ = pz + exitOffsetZ + bellyZ;
+
+      // D. Smooth Tabletop Desk Clearance Protection
+      const endpointPinLock = Math.sin(Math.PI * u);
+      const effectiveFloorY = THREE.MathUtils.lerp(Math.min(startVec.y, endVec.y, deskY), deskY, endpointPinLock);
+      const clampedY = this._smoothFloorClamp(rawY, effectiveFloorY, 15.0);
+
+      const floorCompression = Math.max(0.0, clampedY - rawY);
+      if (floorCompression > 1e-4) {
+        finalZ += floorCompression * 0.42 * endpointPinLock;
+      }
+
+      const safeY = (rawY < deskY && startVec.y >= deskY && endVec.y >= deskY)
+        ? Math.max(deskY, clampedY)
+        : clampedY;
+
+      points.push(new THREE.Vector3(finalX, safeY, finalZ));
+    }
+
+    return new THREE.CatmullRomCurve3(points, false, 'centripetal', 0.5);
   }
 
   syncCables(cables = [], pinStackGetter = null) {
@@ -4231,7 +4364,7 @@ export class TrainerScene3D {
       );
       // Slim, realistic jumper wire thickness so even 30+ wires never obscure the board
       const tubeRadius = cable.category === 'alligator' ? 0.056 : 0.034;
-      const tubeGeo = new THREE.TubeGeometry(curve, 18, tubeRadius, 6, false);
+      const tubeGeo = new THREE.TubeGeometry(curve, 24, tubeRadius, 6, false);
       const tubeMat = new THREE.MeshStandardMaterial({
         color: WIRE_COLOR_HEX[cable.color] || 0xd93829,
         roughness: 0.45,
