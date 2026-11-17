@@ -195,11 +195,11 @@ class AutomotiveBenchApp {
     }
 
     if (this.elDmmRedPinName) {
-      this.elDmmRedPinName.textContent = redPin || 'Belum terpasang';
+      this.elDmmRedPinName.textContent = redPin || 'Lepas';
       this.elDmmRedPinName.classList.toggle('is-empty', !redPin);
     }
     if (this.elDmmBlackPinName) {
-      this.elDmmBlackPinName.textContent = blackPin || 'Belum terpasang';
+      this.elDmmBlackPinName.textContent = blackPin || 'Lepas';
       this.elDmmBlackPinName.classList.toggle('is-empty', !blackPin);
     }
 

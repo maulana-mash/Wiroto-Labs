@@ -277,16 +277,15 @@
             <div class="dmm-selector-group">
               <span class="dmm-section-title">Fungsi Selektor</span>
               <div class="dmm-dial-buttons" role="group" aria-label="Mode Multimeter">
-                <button class="dmm-dial-btn" data-dmm-mode="OFF" type="button">OFF</button>
-                <button class="dmm-dial-btn is-active" data-dmm-mode="V_DC" type="button">V (DC)</button>
-                <button class="dmm-dial-btn" data-dmm-mode="OHM" type="button">Ω (Ohm)</button>
-                <button class="dmm-dial-btn" data-dmm-mode="CONTINUITY" type="button">
-                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" style="display:inline-block; vertical-align:middle; margin-right:2px;">
-                    <path d="M11 5L6 9H2v6h4l5 4V5z" /><path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                <button class="dmm-dial-btn" data-dmm-mode="OFF" type="button" title="Matikan Multimeter">OFF</button>
+                <button class="dmm-dial-btn is-active" data-dmm-mode="V_DC" type="button" title="Tegangan DC (Volt)">V (DC)</button>
+                <button class="dmm-dial-btn" data-dmm-mode="OHM" type="button" title="Resistansi (Ohm)">Ω</button>
+                <button class="dmm-dial-btn" data-dmm-mode="CONTINUITY" type="button" title="Uji Kontinuitas (Buzzer)">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+                    <path d="M11 5L6 9H2v6h4l5 4V5z" /><path d="M15.54 8.46a5 5 0 0 1 0 7.07" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
                   </svg>
-                  Kontinuitas
                 </button>
-                <button class="dmm-dial-btn" data-dmm-mode="A_DC" type="button">A (DC)</button>
+                <button class="dmm-dial-btn" data-dmm-mode="A_DC" type="button" title="Arus DC (Ampere)">A (DC)</button>
               </div>
             </div>
 
@@ -294,23 +293,23 @@
             <div class="dmm-probes-status">
               <div class="dmm-probe-card dmm-probe-red">
                 <div class="dmm-probe-header">
-                  <span class="dmm-probe-tag probe-tag-red">+ V/Ω/mA</span>
+                  <span class="dmm-probe-tag probe-tag-red">+ V/Ω</span>
                   <button id="btn-dmm-pick-red" class="btn-dmm-pick" type="button">Pilih Pin</button>
                 </div>
                 <div class="dmm-probe-pin-target">
                   <span class="pin-hint-label">Pin:</span>
-                  <strong id="dmm-red-pin-name" class="dmm-pin-chip is-empty">Belum terpasang</strong>
+                  <strong id="dmm-red-pin-name" class="dmm-pin-chip is-empty">Lepas</strong>
                 </div>
               </div>
 
               <div class="dmm-probe-card dmm-probe-black">
                 <div class="dmm-probe-header">
-                  <span class="dmm-probe-tag probe-tag-black">COM (GND)</span>
+                  <span class="dmm-probe-tag probe-tag-black">COM</span>
                   <button id="btn-dmm-pick-black" class="btn-dmm-pick" type="button">Pilih Pin</button>
                 </div>
                 <div class="dmm-probe-pin-target">
                   <span class="pin-hint-label">Pin:</span>
-                  <strong id="dmm-black-pin-name" class="dmm-pin-chip is-empty">Belum terpasang</strong>
+                  <strong id="dmm-black-pin-name" class="dmm-pin-chip is-empty">Lepas</strong>
                 </div>
               </div>
             </div>

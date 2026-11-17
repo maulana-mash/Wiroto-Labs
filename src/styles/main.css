@@ -1172,8 +1172,8 @@ button { font: inherit; color: inherit; }
   position: absolute;
   right: 12px;
   bottom: 54px;
-  width: 216px;
-  max-height: 280px;
+  width: 236px;
+  max-height: 290px;
   background: #0f172a;
   border: 2px solid #facc15;
   border-radius: 10px;
@@ -1356,7 +1356,7 @@ button { font: inherit; color: inherit; }
 
 .dmm-dial-buttons {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 3px;
 }
 
@@ -1370,11 +1370,14 @@ button { font: inherit; color: inherit; }
   border-radius: 6px;
   color: #cbd5e1;
   font-family: var(--font-display);
-  font-size: 9.5px;
+  font-size: 8.5px;
   font-weight: 700;
   cursor: pointer;
   transition: all 0.15s ease;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dmm-dial-btn:hover {
@@ -1394,16 +1397,18 @@ button { font: inherit; color: inherit; }
 /* Probe Cards */
 .dmm-probes-status {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
 }
 
 .dmm-probe-card {
-  padding: 6px;
+  padding: 5px 6px;
   border-radius: 7px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .dmm-probe-red {
@@ -1420,13 +1425,17 @@ button { font: inherit; color: inherit; }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 4px;
 }
 
 .dmm-probe-tag {
-  font-size: 9px;
+  font-size: 8.5px;
   font-weight: 800;
-  padding: 1px 4px;
+  padding: 1.5px 4px;
   border-radius: 3px;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
 }
 
 .probe-tag-red {
@@ -1440,7 +1449,7 @@ button { font: inherit; color: inherit; }
 }
 
 .btn-dmm-pick {
-  font-size: 9px;
+  font-size: 8px;
   font-weight: 700;
   padding: 2px 5px;
   background: #334155;
@@ -1448,6 +1457,9 @@ button { font: inherit; color: inherit; }
   border-radius: 4px;
   color: #e2e8f0;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
 }
 
 .btn-dmm-pick:hover {
@@ -1463,26 +1475,32 @@ button { font: inherit; color: inherit; }
 
 .dmm-probe-pin-target {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 
 .pin-hint-label {
-  font-size: 8.5px;
+  font-size: 8px;
   color: #94a3b8;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .dmm-pin-chip {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 8.5px;
   font-weight: 700;
   color: #f8fafc;
   background: rgba(255, 255, 255, 0.08);
-  padding: 2px 4px;
+  padding: 1.5px 4px;
   border-radius: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  text-align: center;
 }
 
 .dmm-pin-chip.is-empty {
