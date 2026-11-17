@@ -1,10 +1,10 @@
-import { CABLE_TYPES, CableManager } from './core/cableEngine.js?v=20261114_01';
-import { MODULES, getModuleById } from './core/modulesData.js?v=20261114_01';
-import { CircuitSolver } from './core/circuitSolver.js?v=20261114_01';
-import { SoundEngine } from './audio/soundEngine.js?v=20261114_01';
-import { TrainerScene3D } from './scene/trainerScene3D.js?v=20261114_01';
-import { ComponentInspector3D, INSPECTOR_COMPONENTS } from './scene/componentInspector3D.js?v=20261114_01';
-import { MULTIMETER_MODES, MultimeterEngine } from './core/multimeterEngine.js?v=20261114_01';
+import { CABLE_TYPES, CableManager } from './core/cableEngine.js?v=20261117_02';
+import { MODULES, getModuleById } from './core/modulesData.js?v=20261117_02';
+import { CircuitSolver } from './core/circuitSolver.js?v=20261117_02';
+import { SoundEngine } from './audio/soundEngine.js?v=20261117_02';
+import { TrainerScene3D } from './scene/trainerScene3D.js?v=20261117_02';
+import { ComponentInspector3D, INSPECTOR_COMPONENTS } from './scene/componentInspector3D.js?v=20261117_02';
+import { MULTIMETER_MODES, MultimeterEngine } from './core/multimeterEngine.js?v=20261117_02';
 
 // Short sidebar group names (full category text stays in module data)
 const GROUP_SHORT = {
@@ -382,10 +382,17 @@ class AutomotiveBenchApp {
     // ------------------------------------------------------------------------
     // MULTIMETER CONTROLS & HUD INTERACTIONS
     // ------------------------------------------------------------------------
+    if (this.elDmmHud) {
+      this.elDmmHud.hidden = true;
+      this.elDmmHud.classList.add('is-hidden');
+    }
+    if (this.elLabelToggleHud) this.elLabelToggleHud.textContent = 'Buka HUD';
+
     const toggleDmmHud = () => {
       if (!this.elDmmHud) return;
-      const isHidden = this.elDmmHud.hidden;
+      const isHidden = this.elDmmHud.hidden || this.elDmmHud.classList.contains('is-hidden');
       this.elDmmHud.hidden = !isHidden;
+      this.elDmmHud.classList.toggle('is-hidden', !isHidden);
       this.multimeter.setHudVisible(isHidden);
       if (this.elBtnToggleDmm) this.elBtnToggleDmm.classList.toggle('is-active', isHidden);
       if (this.elLabelToggleHud) this.elLabelToggleHud.textContent = isHidden ? 'Tutup HUD' : 'Buka HUD';
@@ -404,7 +411,10 @@ class AutomotiveBenchApp {
 
     if (this.elBtnDmmClose) {
       this.elBtnDmmClose.addEventListener('click', () => {
-        if (this.elDmmHud) this.elDmmHud.hidden = true;
+        if (this.elDmmHud) {
+          this.elDmmHud.hidden = true;
+          this.elDmmHud.classList.add('is-hidden');
+        }
         this.multimeter.setHudVisible(false);
         if (this.elBtnToggleDmm) this.elBtnToggleDmm.classList.remove('is-active');
         if (this.elLabelToggleHud) this.elLabelToggleHud.textContent = 'Buka HUD';

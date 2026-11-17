@@ -36,7 +36,7 @@ export class MultimeterEngine {
     this.redPin = null;
     this.blackPin = null;
     this.active = true;
-    this.hudVisible = true;
+    this.hudVisible = false;
     this.hudMinimized = false;
 
     this.reading = {

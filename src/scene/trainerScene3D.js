@@ -215,14 +215,51 @@ export class TrainerScene3D {
   }
 
   _addInkedOutline(mesh, color = 0x191917, opacity = 0.82) {
-    if (!mesh.geometry) return null;
-    const edges = new THREE.EdgesGeometry(mesh.geometry, 24);
+    if (!mesh || !mesh.geometry) return null;
+    // Tier 3 Filter: Background room objects never need inked line segments
+    if (this._isBuildingEnvironment) return null;
+    if (mesh.userData && mesh.userData.noOutline) return null;
+
+    // Tier 3 Filter: Skip microscopic mechanical details by naming pattern
+    const name = (mesh.name || '').toLowerCase();
+    if (
+      name.includes('screw') ||
+      name.includes('bolt') ||
+      name.includes('baut') ||
+      name.includes('nut') ||
+      name.includes('mur') ||
+      name.includes('blade') ||
+      name.includes('pin') ||
+      name.includes('cap') ||
+      name.includes('filament') ||
+      name.includes('bulb_glass') ||
+      name.includes('needle') ||
+      name.includes('port')
+    ) {
+      return null;
+    }
+
+    // Tier 3 Filter: Automatically skip sub-parts below 0.38 unit bounding radius
+    if (!mesh.geometry.boundingSphere) {
+      mesh.geometry.computeBoundingSphere();
+    }
+    const bs = mesh.geometry.boundingSphere;
+    if (bs && bs.radius < 0.38) {
+      return null;
+    }
+
+    const edges = new THREE.EdgesGeometry(mesh.geometry, 28);
     const lineMat = new THREE.LineBasicMaterial({
       color,
       transparent: opacity < 1,
       opacity,
+      toneMapped: false,
     });
     const lines = new THREE.LineSegments(edges, lineMat);
+    lines.name = 'inked_outline';
+    // CRITICAL FOR 60 FPS: Disable raycasting on line segments to avoid pointer lag
+    lines.raycast = () => {};
+    lines.frustumCulled = true;
     mesh.add(lines);
     return lines;
   }
@@ -309,6 +346,7 @@ export class TrainerScene3D {
   }
 
   _buildEnvironment(presetId = 'kelas_tkr') {
+    this._isBuildingEnvironment = true;
     while (this.environmentGroup.children.length > 0) {
       this.environmentGroup.remove(this.environmentGroup.children[0]);
     }
@@ -344,6 +382,7 @@ export class TrainerScene3D {
       pad.receiveShadow = true;
       this._addInkedOutline(pad, 0x94a3b8, 0.5);
       this.environmentGroup.add(pad);
+      this._isBuildingEnvironment = false;
       return;
     }
 
@@ -426,6 +465,7 @@ export class TrainerScene3D {
         tree.add(trunk, crown);
         this.environmentGroup.add(tree);
       }
+      this._isBuildingEnvironment = false;
       return;
     }
 
@@ -524,6 +564,7 @@ export class TrainerScene3D {
       crossBar.position.set(20.0, floorY + 11.3, -7.5);
       this._addInkedOutline(crossBar);
       this.environmentGroup.add(crossBar);
+      this._isBuildingEnvironment = false;
       return;
     }
 
@@ -623,6 +664,7 @@ export class TrainerScene3D {
       benchGroup.add(leg);
     }
     this.environmentGroup.add(benchGroup);
+    this._isBuildingEnvironment = false;
   }
 
   // ============================================================================
@@ -3850,78 +3892,88 @@ export class TrainerScene3D {
     group.position.set(x, y, z);
 
     const isBatteryPost = pin.terminalType === 'battery_post';
-    const collarHex = PIN_COLOR_HEX[pin.color] || 0xd93829;
+    const collarColorKey = pin.color || 'red';
+
+    // Shared reusable geometries across all 78+ pin sockets
+    if (!this._pinGeometries) {
+      const socketCollarGeo = new THREE.CylinderGeometry(0.115, 0.128, 0.16, 12);
+      socketCollarGeo.rotateX(Math.PI / 2);
+      const socketBoreGeo = new THREE.CylinderGeometry(0.052, 0.052, 0.19, 8);
+      socketBoreGeo.rotateX(Math.PI / 2);
+      const socketHitGeo = new THREE.SphereGeometry(0.32, 10, 10);
+
+      const battRingGeo = new THREE.CylinderGeometry(0.26, 0.3, 0.14, 14);
+      const battPostGeo = new THREE.CylinderGeometry(0.15, 0.18, 0.38, 14);
+      const battHitGeo = new THREE.SphereGeometry(0.44, 10, 10);
+
+      this._pinGeometries = {
+        socketCollarGeo,
+        socketBoreGeo,
+        socketHitGeo,
+        battRingGeo,
+        battPostGeo,
+        battHitGeo,
+      };
+    }
+
+    // Shared reusable materials across all 78+ pin sockets (drastically reduces GPU state changes)
+    if (!this._pinMaterials) {
+      this._pinMaterials = {
+        red: new THREE.MeshStandardMaterial({ color: PIN_COLOR_HEX.red, roughness: 0.4, metalness: 0.15 }),
+        black: new THREE.MeshStandardMaterial({ color: PIN_COLOR_HEX.black, roughness: 0.4, metalness: 0.15 }),
+        yellow: new THREE.MeshStandardMaterial({ color: PIN_COLOR_HEX.yellow, roughness: 0.4, metalness: 0.15 }),
+        blue: new THREE.MeshStandardMaterial({ color: PIN_COLOR_HEX.blue, roughness: 0.4, metalness: 0.15 }),
+        brassBore: new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.8, roughness: 0.25 }),
+        leadPost: new THREE.MeshStandardMaterial({ color: 0x9ca3af, metalness: 0.75, roughness: 0.3 }),
+        invisibleHit: new THREE.MeshBasicMaterial({ visible: false }),
+      };
+    }
 
     let collarMesh;
     let boreMesh;
     let hitMesh;
 
     if (isBatteryPost) {
-      // Vertical automotive battery lead post standing upright (+Y) on the battery cover
-      const ringGeo = new THREE.CylinderGeometry(0.26, 0.3, 0.14, 18);
-      const ringMat = new THREE.MeshStandardMaterial({ color: collarHex, roughness: 0.4 });
-      collarMesh = new THREE.Mesh(ringGeo, ringMat);
+      const ringMat = this._pinMaterials[collarColorKey] || this._pinMaterials.red;
+      collarMesh = new THREE.Mesh(this._pinGeometries.battRingGeo, ringMat);
       collarMesh.position.set(0, 0.07, 0);
       collarMesh.userData = { pinId: pin.id, pinData: pin };
       group.add(collarMesh);
 
-      const postGeo = new THREE.CylinderGeometry(0.15, 0.18, 0.38, 18);
-      const postMat = new THREE.MeshStandardMaterial({
-        color: 0x9ca3af,
-        metalness: 0.75,
-        roughness: 0.3,
-      });
-      boreMesh = new THREE.Mesh(postGeo, postMat);
+      boreMesh = new THREE.Mesh(this._pinGeometries.battPostGeo, this._pinMaterials.leadPost);
       boreMesh.position.set(0, 0.26, 0);
       boreMesh.userData = { pinId: pin.id, pinData: pin };
       group.add(boreMesh);
 
-      const hitGeo = new THREE.SphereGeometry(0.42, 12, 12);
-      const hitMat = new THREE.MeshBasicMaterial({ visible: false });
-      hitMesh = new THREE.Mesh(hitGeo, hitMat);
+      hitMesh = new THREE.Mesh(this._pinGeometries.battHitGeo, this._pinMaterials.invisibleHit);
       hitMesh.position.set(0, 0.26, 0);
       hitMesh.userData = { pinId: pin.id, pinData: pin };
       group.add(hitMesh);
     } else {
-      // Compact board banana socket at the bottom of the component cell
-      const collarGeo = new THREE.CylinderGeometry(0.115, 0.128, 0.16, 16);
-      collarGeo.rotateX(Math.PI / 2);
-      const collarMat = new THREE.MeshStandardMaterial({
-        color: collarHex,
-        roughness: 0.4,
-        metalness: 0.15,
-      });
-      collarMesh = new THREE.Mesh(collarGeo, collarMat);
+      const collarMat = this._pinMaterials[collarColorKey] || this._pinMaterials.red;
+      collarMesh = new THREE.Mesh(this._pinGeometries.socketCollarGeo, collarMat);
       collarMesh.position.set(0, 0, 0.12);
       collarMesh.userData = { pinId: pin.id, pinData: pin };
       group.add(collarMesh);
 
-      const boreGeo = new THREE.CylinderGeometry(0.052, 0.052, 0.19, 12);
-      boreGeo.rotateX(Math.PI / 2);
-      const boreMat = new THREE.MeshStandardMaterial({
-        color: 0xd4af37,
-        metalness: 0.8,
-        roughness: 0.25,
-      });
-      boreMesh = new THREE.Mesh(boreGeo, boreMat);
+      boreMesh = new THREE.Mesh(this._pinGeometries.socketBoreGeo, this._pinMaterials.brassBore);
       boreMesh.position.set(0, 0, 0.13);
       boreMesh.userData = { pinId: pin.id, pinData: pin };
       group.add(boreMesh);
 
-      const hitGeo = new THREE.SphereGeometry(0.28, 12, 12);
-      const hitMat = new THREE.MeshBasicMaterial({ visible: false });
-      hitMesh = new THREE.Mesh(hitGeo, hitMat);
+      hitMesh = new THREE.Mesh(this._pinGeometries.socketHitGeo, this._pinMaterials.invisibleHit);
       hitMesh.position.set(0, 0, 0.2);
       hitMesh.userData = { pinId: pin.id, pinData: pin };
       group.add(hitMesh);
     }
 
-    // Surface-mounted 3D pin indicator tag (stuck flat onto the trainer board!)
+    // Surface-mounted 3D pin indicator tag
     const tagMesh = this._createPinSurfaceTagMesh(pin, 0);
     group.add(tagMesh);
     this.pinSurfaceTags.set(pin.id, tagMesh);
 
-    this.interactiveTargets.push(collarMesh, boreMesh, hitMesh, tagMesh);
+    // Highly optimized raycast target list: hitMesh is the primary interaction target
+    this.interactiveTargets.push(hitMesh, collarMesh);
 
     group.userData = { pinId: pin.id, pinData: pin, collarMesh, hitMesh, tagMesh };
     return group;
