@@ -15,41 +15,40 @@ function makePin(id, label, componentId, x, y, z = 0.45, color = 'red', terminal
   };
 }
 
-// Battery for standard trainers (Fig. 00 - Fig. 05 & AC) sits cleanly on middle tabletop desk (top surface at Y = -3.61)
-const TABLE_BATTERY_COMPONENT = {
+const COMMON_BATTERY_COMPONENT = {
   id: 'ACCU_12V',
   type: 'battery_12v',
   title: 'Aki 12V 45Ah',
-  subtitle: 'Meja Trainer',
+  subtitle: 'Rak Bawah Trainer',
+  pos: [-7.0, -6.0, 2.2],
+  size: [4.6, 2.0, 2.4],
+};
+
+// Battery posts sit on the top face of the battery (Y = -5.0), toward the front edge.
+const COMMON_BATTERY_PINS = [
+  makePin('BAT_POS', 'AKI +', 'ACCU_12V', -5.5, -5.0, 2.8, 'red', 'battery_post'),
+  makePin('BAT_NEG', 'AKI -', 'ACCU_12V', -8.5, -5.0, 2.8, 'black', 'battery_post'),
+];
+
+// Battery for AC Trainer sits cleanly ON the middle tabletop desk (Y = -2.66), completely separated from lower engine/motor
+const AC_BATTERY_COMPONENT = {
+  id: 'ACCU_12V',
+  type: 'battery_12v',
+  title: 'Aki 12V 45Ah',
+  subtitle: 'Meja Trainer AC',
   pos: [-8.5, -2.66, 2.2],
   size: [3.8, 1.9, 2.2],
 };
 
-const TABLE_BATTERY_PINS = [
+const AC_BATTERY_PINS = [
   makePin('BAT_POS', 'AKI +', 'ACCU_12V', -7.5, -1.6, 2.6, 'red', 'battery_post'),
   makePin('BAT_NEG', 'AKI -', 'ACCU_12V', -9.5, -1.6, 2.6, 'black', 'battery_post'),
 ];
 
-const COMMON_BATTERY_COMPONENT = TABLE_BATTERY_COMPONENT;
-const COMMON_BATTERY_PINS = TABLE_BATTERY_PINS;
-
-const AC_BATTERY_COMPONENT = TABLE_BATTERY_COMPONENT;
-const AC_BATTERY_PINS = TABLE_BATTERY_PINS;
-
-// Battery for Fig. 06 Full Body Trainer sits cleanly on Fig. 06 middle workbench table (top surface at Y = -5.65)
-const FIG06_BATTERY_COMPONENT = {
-  id: 'ACCU_12V',
-  type: 'battery_12v',
-  title: 'Aki 12V 45Ah',
-  subtitle: 'Meja Trainer Bodi',
-  pos: [-8.8, -4.70, 2.2],
-  size: [3.8, 1.9, 2.2],
-};
-
-const FIG06_BATTERY_PINS = [
-  makePin('BAT_POS', 'AKI +', 'ACCU_12V', -7.8, -3.65, 2.6, 'red', 'battery_post'),
-  makePin('BAT_NEG', 'AKI -', 'ACCU_12V', -9.8, -3.65, 2.6, 'black', 'battery_post'),
-];
+const TABLE_BATTERY_COMPONENT = COMMON_BATTERY_COMPONENT;
+const TABLE_BATTERY_PINS = COMMON_BATTERY_PINS;
+const FIG06_BATTERY_COMPONENT = COMMON_BATTERY_COMPONENT;
+const FIG06_BATTERY_PINS = COMMON_BATTERY_PINS;
 
 export const MODULES = [
   // ============================================================================
