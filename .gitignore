@@ -1,0 +1,31 @@
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor & AI directories
+.vscode/
+.idea/
+.gemini/
+*.sublime-project
+*.sublime-workspace
+
+# Logs & Temporary files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tmp
+*.temp
+
+# Node & Python
+node_modules/
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# Local testing artifacts
+test-results/

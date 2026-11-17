@@ -1,0 +1,25 @@
+{
+  "name": "wiroto-labs",
+  "version": "1.0.0",
+  "description": "Wiroto Labs — Interactive 3D Automotive Electrical & AC Refrigeration Trainer Simulator",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "start": "python serve.py"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maulana-mash/Wiroto-Labs.git"
+  },
+  "keywords": [
+    "automotive-bench",
+    "wiroto-labs",
+    "vocational-training",
+    "threejs",
+    "circuit-simulator",
+    "smk-tkr",
+    "air-conditioning"
+  ],
+  "author": "Maulana Mash",
+  "license": "MIT"
+}
