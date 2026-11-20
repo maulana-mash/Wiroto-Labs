@@ -4589,11 +4589,11 @@ export class TrainerScene3D {
 
     const tiltX = pin.tiltX || 0;
     const normal = new THREE.Vector3(0, -Math.sin(tiltX), Math.cos(tiltX)).normalize();
-    const distOut = 0.22 + explodeOffsetZ + stackIndex * PLUG_STACK_STEP;
+    const distOut = 0.22 + stackIndex * PLUG_STACK_STEP;
     plugGroup.position.set(
       px + normal.x * distOut,
       py + normal.y * distOut,
-      pz + normal.z * distOut
+      pz + normal.z * distOut + explodeOffsetZ
     );
     if (tiltX) {
       plugGroup.rotation.x = tiltX;
@@ -4621,7 +4621,7 @@ export class TrainerScene3D {
       tipWorldPos: new THREE.Vector3(
         px + normal.x * (distOut + 0.085),
         py + normal.y * (distOut + 0.085),
-        pz + normal.z * (distOut + 0.085)
+        pz + normal.z * (distOut + 0.085) + explodeOffsetZ
       ),
       normal,
     };
@@ -4729,6 +4729,17 @@ export class TrainerScene3D {
         p1.y = Math.max(-3.45, p1.y);
         pMid.y = Math.max(-3.45, pMid.y);
         p2.y = Math.max(-3.45, p2.y);
+      }
+
+      if (this.module?.hasAngledConsole && this.module?.consoleConfig) {
+        const cfg = this.module.consoleConfig;
+        const tanTilt = Math.tan(Math.abs(cfg.tiltX));
+        for (const pt of [p1, pMid, p2]) {
+          if (pt.y < cfg.hingeY + 0.15) {
+            const consoleSurfaceZ = cfg.hingeZ + Math.max(0, cfg.hingeY - pt.y) * tanTilt;
+            pt.z = Math.max(pt.z, consoleSurfaceZ + 0.14);
+          }
+        }
       }
 
       return new THREE.CatmullRomCurve3([startVec, p1, pMid, p2, endVec]);
@@ -5133,12 +5144,12 @@ export class TrainerScene3D {
       }
       const tiltX = pin.tiltX || 0;
       const normal = new THREE.Vector3(0, -Math.sin(tiltX), Math.cos(tiltX)).normalize();
-      const out = 0.28 + explodeZ;
+      const out = 0.28;
       return {
         pos: new THREE.Vector3(
           pin.pos[0] + normal.x * out,
           pin.pos[1] + normal.y * out,
-          pin.pos[2] + normal.z * out
+          pin.pos[2] + normal.z * out + explodeZ
         ),
         normal,
       };
@@ -5742,33 +5753,22 @@ export class TrainerScene3D {
       this.controls.target.y = FLOOR_Y + 1.2;
     }
 
-    // Smooth exploded view interpolation (respects angled console surface normals!)
+    // Smooth exploded view interpolation (uniform forward +Z along trainer front so angled console components never collide with upper row)
     const targetExplode = this.explodedView ? 1 : 0;
     this.explodeProgress += (targetExplode - this.explodeProgress) * Math.min(1, deltaSeconds * 9);
 
+    const lift = this.explodeProgress * 1.45;
     for (const [, group] of this.componentGroups.entries()) {
       if (group.userData.type === 'battery_12v') continue;
-      const tiltX = group.userData.tiltX || 0;
-      const lift = this.explodeProgress * 1.45;
-      if (tiltX) {
-        group.position.y = group.userData.baseY - Math.sin(tiltX) * lift;
-        group.position.z = group.userData.baseZ + Math.cos(tiltX) * lift;
-      } else {
-        group.position.z = group.userData.baseZ + lift;
-      }
+      group.position.y = group.userData.baseY;
+      group.position.z = group.userData.baseZ + lift;
     }
 
     for (const [, pinGroup] of this.pinMeshes.entries()) {
       const pData = pinGroup.userData.pinData;
       if (pData?.terminalType === 'battery_post') continue;
-      const tiltX = pData?.tiltX || 0;
-      const lift = this.explodeProgress * 1.45;
-      if (tiltX) {
-        pinGroup.position.y = pData.pos[1] - Math.sin(tiltX) * lift;
-        pinGroup.position.z = pData.pos[2] + Math.cos(tiltX) * lift;
-      } else {
-        pinGroup.position.z = pData.pos[2] + lift;
-      }
+      pinGroup.position.y = pData.pos[1];
+      pinGroup.position.z = pData.pos[2] + lift;
     }
 
     // Rebuild cable curves when explodeProgress transitions so cables route underneath lifted components
