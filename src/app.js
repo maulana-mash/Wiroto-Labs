@@ -1,10 +1,10 @@
-import { CABLE_TYPES, CableManager } from './core/cableEngine.js?v=20261120_01';
-import { MODULES, getModuleById } from './core/modulesData.js?v=20261120_01';
-import { CircuitSolver } from './core/circuitSolver.js?v=20261120_01';
-import { SoundEngine } from './audio/soundEngine.js?v=20261120_01';
-import { TrainerScene3D } from './scene/trainerScene3D.js?v=20261120_01';
-import { ComponentInspector3D, INSPECTOR_COMPONENTS } from './scene/componentInspector3D.js?v=20261120_01';
-import { MULTIMETER_MODES, MultimeterEngine } from './core/multimeterEngine.js?v=20261120_01';
+import { CABLE_TYPES, CableManager } from './core/cableEngine.js?v=20261120_02';
+import { MODULES, getModuleById } from './core/modulesData.js?v=20261120_02';
+import { CircuitSolver } from './core/circuitSolver.js?v=20261120_02';
+import { SoundEngine } from './audio/soundEngine.js?v=20261120_02';
+import { TrainerScene3D } from './scene/trainerScene3D.js?v=20261120_02';
+import { ComponentInspector3D, INSPECTOR_COMPONENTS } from './scene/componentInspector3D.js?v=20261120_02';
+import { MULTIMETER_MODES, MultimeterEngine } from './core/multimeterEngine.js?v=20261120_02';
 
 // Short sidebar group names (full category text stays in module data)
 const GROUP_SHORT = {
@@ -103,6 +103,25 @@ class AutomotiveBenchApp {
     this.elBtnDmmPickRed = $('btn-dmm-pick-red');
     this.elBtnDmmPickBlack = $('btn-dmm-pick-black');
     this.elBtnDmmResetProbes = $('btn-dmm-reset-probes');
+
+    // Manifold Gauge & AC Telemetry HUD (Bottom-Left)
+    this.elManifoldHud = $('manifold-hud');
+    this.elBtnToggleManifold = $('btn-toggle-manifold');
+    this.elBtnMfgMinimize = $('btn-mfg-minimize');
+    this.elBtnMfgClose = $('btn-mfg-close');
+    this.elMfgStatusPill = $('mfg-status-pill');
+    this.elMfgNeedleLow = $('mfg-needle-low');
+    this.elMfgNeedleHigh = $('mfg-needle-high');
+    this.elMfgLowPsi = $('mfg-low-psi');
+    this.elMfgLowBar = $('mfg-low-bar');
+    this.elMfgHighPsi = $('mfg-high-psi');
+    this.elMfgHighBar = $('mfg-high-bar');
+    this.elMfgSightDot = $('mfg-sight-dot');
+    this.elMfgSightState = $('mfg-sight-state');
+    this.elMfgRpmVal = $('mfg-rpm-val');
+    this.elMfgTempT1 = $('mfg-temp-t1');
+    this.elMfgTempT2 = $('mfg-temp-t2');
+    this.elMfgTempT3 = $('mfg-temp-t3');
   }
 
   _initScene() {
@@ -431,6 +450,40 @@ class AutomotiveBenchApp {
       });
     }
 
+    // Manifold Gauge & AC Telemetry HUD Controls
+    const setManifoldHudVisible = (visible) => {
+      if (!this.elManifoldHud) return;
+      this.elManifoldHud.hidden = !visible;
+      this.elManifoldHud.classList.toggle('is-hidden', !visible);
+      if (this.elBtnToggleManifold) {
+        this.elBtnToggleManifold.classList.toggle('is-active', visible);
+      }
+    };
+    this._setManifoldHudVisible = setManifoldHudVisible;
+
+    if (this.elBtnToggleManifold) {
+      this.elBtnToggleManifold.addEventListener('click', () => {
+        const isHidden = !this.elManifoldHud || this.elManifoldHud.hidden || this.elManifoldHud.classList.contains('is-hidden');
+        setManifoldHudVisible(isHidden);
+        this.sound.playToggleClick();
+      });
+    }
+
+    if (this.elBtnMfgMinimize) {
+      this.elBtnMfgMinimize.addEventListener('click', () => {
+        if (!this.elManifoldHud) return;
+        this.elManifoldHud.classList.toggle('is-minimized');
+        this.sound.playToggleClick();
+      });
+    }
+
+    if (this.elBtnMfgClose) {
+      this.elBtnMfgClose.addEventListener('click', () => {
+        setManifoldHudVisible(false);
+        this.sound.playToggleClick();
+      });
+    }
+
     // Dial Mode Selector Buttons
     document.querySelectorAll('[data-dmm-mode]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -701,7 +754,22 @@ class AutomotiveBenchApp {
     this._renderSwitchesBar();
     this._syncAfterWireChange();
 
-    if (moduleId.startsWith('ac')) {
+    const isAcModule = moduleId.startsWith('ac');
+    const hasManifoldGauge = (this.activeModule.components || []).some(
+      (c) => c.type === 'manifold_gauge_unit' || c.type === 'digital_temp_unit'
+    );
+    if (this.elBtnToggleManifold) {
+      this.elBtnToggleManifold.hidden = !isAcModule;
+    }
+    if (this._setManifoldHudVisible) {
+      // Automatically open Manifold Gauge HUD on AC03 (or any module with Manifold Gauge) and hide on Body modules
+      this._setManifoldHudVisible(Boolean(isAcModule && hasManifoldGauge));
+      if (this.elManifoldHud && hasManifoldGauge) {
+        this.elManifoldHud.classList.remove('is-minimized');
+      }
+    }
+
+    if (isAcModule) {
       this.toast(`Trainer AC Mobil (R134a): ${this.activeModule.title}`, 'normal', { sticky: true });
     }
   }
@@ -918,7 +986,16 @@ class AutomotiveBenchApp {
 
   cycleComponentSwitch(compId) {
     const comp = (this.activeModule.components || []).find((c) => c.id === compId);
-    if (!comp || !Array.isArray(comp.states) || comp.momentary) return;
+    if (!comp) return;
+    if (comp.type === 'manifold_gauge_unit' || comp.type === 'digital_temp_unit') {
+      if (this._setManifoldHudVisible) {
+        this._setManifoldHudVisible(true);
+        this.elManifoldHud?.classList.remove('is-minimized');
+        this.sound.playToggleClick();
+      }
+      return;
+    }
+    if (!Array.isArray(comp.states) || comp.momentary) return;
     const idx = comp.states.indexOf(this.solver.getSwitchState(compId));
     this.solver.setSwitchState(compId, comp.states[(idx + 1) % comp.states.length]);
     this.sound.playRelayClick(true);
@@ -1177,6 +1254,7 @@ class AutomotiveBenchApp {
     const dmmReading = this.multimeter.update(snapshot, this.activeModule, this.cableManager.getCables());
     this.sound.setMultimeterBeep(Boolean(dmmReading.beeping));
     this._updateMultimeterHUD(dmmReading);
+    this._updateManifoldHUD(snapshot.refrigeration);
     this.scene3D.syncMultimeter(this.multimeter);
 
     // Re-render checklist only when it changes
@@ -1224,6 +1302,56 @@ class AutomotiveBenchApp {
       };
       this.elDmmModeInd.textContent = modeLabels[this.multimeter.mode] || 'DC';
     }
+  }
+
+  _updateManifoldHUD(ref) {
+    if (!this.elManifoldHud || this.elManifoldHud.hidden) return;
+
+    const lpPsi = Math.max(0, Math.min(120, ref?.lowPressurePsi ?? 0));
+    const hpPsi = Math.max(0, Math.min(500, ref?.highPressurePsi ?? 0));
+    const lpBar = lpPsi * 0.0689476;
+    const hpBar = hpPsi * 0.0689476;
+    const rpm = Math.round(ref?.compressorRpm ?? 0);
+    const clutchOn = Boolean(ref?.clutchEngaged);
+    const coolingOn = Boolean(clutchOn && rpm > 0);
+
+    // Rotate SVG gauge needles (-135deg to +135deg across 270deg span)
+    const lpAngle = -135 + (lpPsi / 120) * 270;
+    const hpAngle = -135 + (hpPsi / 500) * 270;
+    if (this.elMfgNeedleLow) {
+      this.elMfgNeedleLow.setAttribute('transform', `rotate(${lpAngle.toFixed(1)} 60 60)`);
+    }
+    if (this.elMfgNeedleHigh) {
+      this.elMfgNeedleHigh.setAttribute('transform', `rotate(${hpAngle.toFixed(1)} 60 60)`);
+    }
+
+    if (this.elMfgLowPsi) this.elMfgLowPsi.textContent = `${lpPsi.toFixed(0)} PSI`;
+    if (this.elMfgLowBar) this.elMfgLowBar.textContent = `${lpBar.toFixed(1)} bar`;
+    if (this.elMfgHighPsi) this.elMfgHighPsi.textContent = `${hpPsi.toFixed(0)} PSI`;
+    if (this.elMfgHighBar) this.elMfgHighBar.textContent = `${hpBar.toFixed(1)} bar`;
+
+    if (this.elMfgStatusPill) {
+      this.elMfgStatusPill.textContent = coolingOn ? 'COOLING ON' : rpm > 0 ? 'CLUTCH OFF' : 'STANDBY';
+      this.elMfgStatusPill.classList.toggle('is-cooling', coolingOn);
+    }
+
+    if (this.elMfgRpmVal) {
+      this.elMfgRpmVal.textContent = `${rpm} RPM`;
+    }
+
+    if (this.elMfgSightDot) {
+      this.elMfgSightDot.classList.toggle('is-flowing', coolingOn);
+    }
+    if (this.elMfgSightState) {
+      this.elMfgSightState.textContent = coolingOn ? 'Mengalir Jernih' : lpPsi > 0 ? 'Setimbang (Equalized)' : 'Diam (Static)';
+    }
+
+    const t1 = (ref?.t1Ambient ?? 28.5).toFixed(1);
+    const t2 = (ref?.t2EvapInlet ?? 27.0).toFixed(1);
+    const t3 = (ref?.t3VentDischarge ?? 27.0).toFixed(1);
+    if (this.elMfgTempT1) this.elMfgTempT1.textContent = `${t1}°C`;
+    if (this.elMfgTempT2) this.elMfgTempT2.textContent = `${t2}°C`;
+    if (this.elMfgTempT3) this.elMfgTempT3.textContent = `${t3}°C`;
   }
 
   _startLoop() {

@@ -1711,3 +1711,287 @@ button { font: inherit; color: inherit; }
   background: #334155;
   color: #fff;
 }
+
+/* ==========================================================================
+   HUD MANIFOLD GAUGE & SUHU DIGITAL AC (BOTTOM-LEFT STAGE OVERLAY)
+   ========================================================================== */
+.manifold-hud {
+  position: absolute;
+  left: 12px;
+  bottom: 84px;
+  width: 288px;
+  background: #0f172a;
+  color: #f8fafc;
+  border: 2px solid #38bdf8;
+  border-radius: 12px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.36);
+  z-index: 38;
+  overflow: hidden;
+  user-select: none;
+}
+
+.manifold-hud[hidden],
+.manifold-hud.is-hidden {
+  display: none !important;
+}
+
+.manifold-hud.is-minimized .mfg-body {
+  display: none;
+}
+
+.mfg-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+}
+
+.mfg-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mfg-title {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 800;
+  color: #38bdf8;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.mfg-status-pill {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 99px;
+  background: #334155;
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+
+.mfg-status-pill.is-cooling {
+  background: #0284c7;
+  color: #f0f9ff;
+}
+
+.mfg-win-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mfg-body {
+  padding: 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mfg-gauges-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.mfg-gauge-card {
+  background: #162133;
+  border-radius: 8px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #29384d;
+}
+
+.mfg-gauge-low {
+  border-color: rgba(37, 99, 235, 0.55);
+}
+
+.mfg-gauge-high {
+  border-color: rgba(220, 38, 38, 0.55);
+}
+
+.mfg-gauge-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.mfg-side-tag {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 800;
+  padding: 1.5px 5px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.tag-low {
+  background: #1d4ed8;
+  color: #ffffff;
+}
+
+.tag-high {
+  background: #b91c1c;
+  color: #ffffff;
+}
+
+.mfg-side-sub {
+  font-size: 8.5px;
+  color: #94a3b8;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mfg-dial-wrap {
+  width: 104px;
+  height: 104px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mfg-dial-svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+#mfg-needle-low,
+#mfg-needle-high {
+  transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.mfg-readout {
+  width: 100%;
+  background: #0b111d;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 4px 7px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.mfg-psi-val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  color: #f8fafc;
+  white-space: nowrap;
+}
+
+.mfg-gauge-low .mfg-psi-val {
+  color: #60a5fa;
+}
+
+.mfg-gauge-high .mfg-psi-val {
+  color: #f87171;
+}
+
+.mfg-bar-val {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+.mfg-sight-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #162133;
+  border: 1px solid #29384d;
+  border-radius: 7px;
+  padding: 5px 8px;
+}
+
+.mfg-sight-left {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.mfg-sight-lens {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #7dd3fc, #0369a1);
+  border: 2px solid #cbd5e1;
+  flex-shrink: 0;
+}
+
+.mfg-sight-lens.is-flowing {
+  background: radial-gradient(circle at 35% 35%, #e0f2fe, #0284c7);
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.55);
+}
+
+.mfg-sight-label {
+  display: block;
+  font-size: 9px;
+  color: #94a3b8;
+  line-height: 1.1;
+}
+
+.mfg-sight-val,
+.mfg-rpm-num {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #f1f5f9;
+}
+
+.mfg-rpm-box {
+  text-align: right;
+}
+
+.mfg-temp-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+}
+
+.mfg-temp-cell {
+  background: #090e17;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 4px 5px;
+  text-align: center;
+}
+
+.mfg-temp-tag {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  color: #94a3b8;
+  margin-bottom: 1px;
+}
+
+.mfg-temp-num {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mfg-temp-num.is-t1 {
+  color: #f87171;
+}
+
+.mfg-temp-num.is-t2 {
+  color: #fbbf24;
+}
+
+.mfg-temp-num.is-t3 {
+  color: #38bdf8;
+}

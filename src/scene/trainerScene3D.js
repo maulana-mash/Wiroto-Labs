@@ -324,6 +324,62 @@ export class TrainerScene3D {
     return tex;
   }
 
+  _buildSuspendedConicalLamps(floorY, shadeColorHex = 0x1e293b, zPos = -3.2) {
+    const cordMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.75 });
+    const collarMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.65, roughness: 0.35 });
+    const shadeMat = new THREE.MeshStandardMaterial({
+      color: shadeColorHex,
+      metalness: 0.55,
+      roughness: 0.38,
+      side: THREE.DoubleSide,
+    });
+    const innerGlowMat = new THREE.MeshBasicMaterial({ color: 0xfff3c4 });
+
+    const lampY = floorY + 20.8;
+    const cordLen = 46.0; // Extends 46 units straight up out of camera frustum so it never looks floating
+
+    for (const lx of [-10.5, 0, 10.5]) {
+      const pGroup = new THREE.Group();
+      pGroup.position.set(lx, lampY, zPos);
+
+      // 1. Long vertical suspension cable extending high above camera view
+      const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.036, cordLen, 10), cordMat);
+      cord.position.y = 0.8 + cordLen / 2;
+      pGroup.add(cord);
+
+      // 2. Top cylindrical socket & heat-sink collar
+      const socket = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.19, 0.36, 18), collarMat);
+      socket.position.y = 0.62;
+      pGroup.add(socket);
+
+      const neckRing = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.10, 18), collarMat);
+      neckRing.position.y = 0.42;
+      pGroup.add(neckRing);
+
+      // 3. Conical industrial lampshade (kerucut)
+      const coneShade = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 1.18, 0.76, 28), shadeMat);
+      coneShade.position.y = 0.0;
+      coneShade.castShadow = true;
+      pGroup.add(coneShade);
+
+      // Rolled bottom rim of the conical shade
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(1.18, 0.032, 10, 28).rotateX(Math.PI / 2), collarMat);
+      rim.position.y = -0.38;
+      pGroup.add(rim);
+
+      // 4. Warm glowing bulb diffuser inside the cone mouth
+      const diffuser = new THREE.Mesh(new THREE.CircleGeometry(1.10, 24).rotateX(Math.PI / 2), innerGlowMat);
+      diffuser.position.y = -0.35;
+      pGroup.add(diffuser);
+
+      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.28, 16, 12), innerGlowMat);
+      bulb.position.y = -0.34;
+      pGroup.add(bulb);
+
+      this.environmentGroup.add(pGroup);
+    }
+  }
+
   _buildEnvironment(presetId = 'kelas_tkr') {
     this._isBuildingEnvironment = true;
     while (this.environmentGroup.children.length > 0) {
@@ -470,29 +526,29 @@ export class TrainerScene3D {
     }
 
     if (presetId === 'bengkel_mobil') {
-      // 3. BENGKEL MOBIL (Moody Dim Automotive Service Garage — highlights headlamp & lamp beams!)
-      this.scene.background = new THREE.Color(0x1e2633);
-      this.scene.fog = new THREE.Fog(0x1e2633, 32, 78);
-      this.renderer.toneMappingExposure = 0.64;
-      this.scene.environmentIntensity = 0.26;
-      this.ambientLight.color.setHex(0xdbeafe);
-      this.ambientLight.intensity = 0.12;
-      this.hemiLight.color.setHex(0x94a3b8);
-      this.hemiLight.groundColor.setHex(0x1e293b);
-      this.hemiLight.intensity = 0.20;
-      this.keyLight.color.setHex(0xfef3c7);
-      this.keyLight.intensity = 0.68;
+      // 3. BENGKEL MOBIL (Comfortable Shaded Automotive Service Workshop — subtle distant fog, not spooky!)
+      this.scene.background = new THREE.Color(0x526173);
+      this.scene.fog = new THREE.Fog(0x526173, 75, 165);
+      this.renderer.toneMappingExposure = 0.74;
+      this.scene.environmentIntensity = 0.34;
+      this.ambientLight.color.setHex(0xe2e8f0);
+      this.ambientLight.intensity = 0.18;
+      this.hemiLight.color.setHex(0xcbd5e1);
+      this.hemiLight.groundColor.setHex(0x334155);
+      this.hemiLight.intensity = 0.28;
+      this.keyLight.color.setHex(0xfff1d6);
+      this.keyLight.intensity = 0.78;
       this.rimLight.color.setHex(0x93c5fd);
-      this.rimLight.intensity = 0.32;
+      this.rimLight.intensity = 0.30;
 
       const floorTex = this._createFloorTileTexture('workshop');
       const floorGeo = new THREE.PlaneGeometry(82, 62);
       floorGeo.rotateX(-Math.PI / 2);
       const floorMat = new THREE.MeshStandardMaterial({
-        color: 0x3b4758,
+        color: 0x4b586b,
         map: floorTex,
-        roughness: 0.52,
-        metalness: 0.14,
+        roughness: 0.55,
+        metalness: 0.12,
       });
       const floor = new THREE.Mesh(floorGeo, floorMat);
       floor.position.set(0, floorY, 0);
@@ -502,7 +558,7 @@ export class TrainerScene3D {
       // Dark slate work-bay pad + safety yellow stripes
       const bayGeo = new THREE.PlaneGeometry(31, 12.5);
       bayGeo.rotateX(-Math.PI / 2);
-      const bayMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.58 });
+      const bayMat = new THREE.MeshStandardMaterial({ color: 0x283445, roughness: 0.58 });
       const bay = new THREE.Mesh(bayGeo, bayMat);
       bay.position.set(0, floorY + 0.02, 1.5);
       bay.receiveShadow = true;
@@ -520,37 +576,28 @@ export class TrainerScene3D {
         this.environmentGroup.add(st);
       }
 
-      // Industrial garage back wall (charcoal slate upper + dark steel lower wainscot)
-      const wallMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.85 });
-      const backWall = new THREE.Mesh(new THREE.BoxGeometry(74, 28, 0.6), wallMat);
-      backWall.position.set(0, floorY + 14, -12.5);
+      // Tall industrial garage back wall (clean slate upper + navy-slate lower wainscot)
+      const wallMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.84 });
+      const backWall = new THREE.Mesh(new THREE.BoxGeometry(78, 38, 0.6), wallMat);
+      backWall.position.set(0, floorY + 19, -12.5);
       backWall.receiveShadow = true;
       this.environmentGroup.add(backWall);
 
-      const wainMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.65 });
-      const wain = new THREE.Mesh(new THREE.BoxGeometry(74, 6.8, 0.68), wainMat);
+      const wainMat = new THREE.MeshStandardMaterial({ color: 0x243244, roughness: 0.68 });
+      const wain = new THREE.Mesh(new THREE.BoxGeometry(78, 6.8, 0.68), wainMat);
       wain.position.set(0, floorY + 3.4, -12.48);
       this.environmentGroup.add(wain);
 
       // Accent amber stripe along wall wainscot
       const wallStripe = new THREE.Mesh(
-        new THREE.BoxGeometry(74, 0.24, 0.72),
+        new THREE.BoxGeometry(78, 0.24, 0.72),
         new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.45 })
       );
       wallStripe.position.set(0, floorY + 6.9, -12.46);
       this.environmentGroup.add(wallStripe);
 
-      // Overhead industrial shop bay LED lamp fixtures (subtle warm-white ceiling strips)
-      const lampHousingMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.6, roughness: 0.4 });
-      const lampTubeMat = new THREE.MeshBasicMaterial({ color: 0xfef3c7 });
-      for (const lx of [-11, 0, 11]) {
-        const housing = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.25, 0.75), lampHousingMat);
-        housing.position.set(lx, floorY + 23.0, -3.5);
-        this.environmentGroup.add(housing);
-        const tube = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.08, 0.45), lampTubeMat);
-        tube.position.set(lx, floorY + 22.84, -3.5);
-        this.environmentGroup.add(tube);
-      }
+      // Conical industrial pendant lamps with tall suspension cords (never looks floating!)
+      this._buildSuspendedConicalLamps(floorY, 0x1e293b, -3.5);
 
       // Workshop banner sign on back wall
       const sign = this._createBlueHeaderBadge('BENGKEL SERVIS KELISTRIKAN OTOMOTIF', 14.5, 1.35);
@@ -660,31 +707,22 @@ export class TrainerScene3D {
 
     // Back wall of SMK TKR Lab (Warm muted cream upper wall + calm SMK green lower wainscot)
     const backWall = new THREE.Mesh(
-      new THREE.BoxGeometry(72, 26, 0.6),
+      new THREE.BoxGeometry(76, 38, 0.6),
       new THREE.MeshStandardMaterial({ color: 0xd8d4c8, roughness: 0.86 })
     );
-    backWall.position.set(0, floorY + 13, -11.5);
+    backWall.position.set(0, floorY + 19, -11.5);
     backWall.receiveShadow = true;
     this.environmentGroup.add(backWall);
 
     const greenWainscot = new THREE.Mesh(
-      new THREE.BoxGeometry(72, 6.8, 0.66),
+      new THREE.BoxGeometry(76, 6.8, 0.66),
       new THREE.MeshStandardMaterial({ color: 0x245940, roughness: 0.72 })
     );
     greenWainscot.position.set(0, floorY + 3.4, -11.46);
     this.environmentGroup.add(greenWainscot);
 
-    // Overhead classroom fluorescent ceiling housings
-    const ceilFixMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.4, roughness: 0.5 });
-    const ceilTubeMat = new THREE.MeshBasicMaterial({ color: 0xf8fafc });
-    for (const lx of [-10, 0, 10]) {
-      const fix = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.22, 0.65), ceilFixMat);
-      fix.position.set(lx, floorY + 23.2, -3.0);
-      this.environmentGroup.add(fix);
-      const tube = new THREE.Mesh(new THREE.BoxGeometry(6.0, 0.06, 0.35), ceilTubeMat);
-      tube.position.set(lx, floorY + 23.06, -3.0);
-      this.environmentGroup.add(tube);
-    }
+    // Conical industrial pendant lamps with tall suspension cords extending out of camera view
+    this._buildSuspendedConicalLamps(floorY, 0x245940, -3.2);
 
     // Classroom Whiteboard with marker tray on back wall
     const wbFrame = new THREE.Mesh(
@@ -4372,6 +4410,11 @@ export class TrainerScene3D {
         sg.position.set(0, hwY - 0.28, zBase + 0.21);
         group.add(sg);
         visuals.sightGlassMesh = sg;
+
+        for (const m of [manifold, lowCup, lowDial, highCup, highDial, sg]) {
+          m.userData = { interactComponentId: comp.id };
+          this.interactiveTargets.push(m);
+        }
       } else if (comp.type === 'digital_temp_unit') {
         // Digital Temperature Display Box (T1 Ambient, T2 Evap Inlet, T3 Vent Discharge) — Zone 2 scaled
         const boxW = Math.min(w * 0.86, 3.6);
@@ -4389,6 +4432,11 @@ export class TrainerScene3D {
         tempScreen.position.set(0, hwY - 0.02, zBase + 0.24);
         group.add(tempScreen);
         visuals.digitalTempScreen = tempScreen;
+
+        for (const m of [box, tempScreen]) {
+          m.userData = { interactComponentId: comp.id };
+          this.interactiveTargets.push(m);
+        }
       } else if (comp.type === 'motor_ac_drive') {
         // Engine Drive Motor Control Panel with RPM selector (800, 1500, 2200 RPM)
         const panelGeo = new THREE.BoxGeometry(1.75, 0.86, 0.20);
