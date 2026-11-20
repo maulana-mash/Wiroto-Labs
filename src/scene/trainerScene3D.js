@@ -1636,10 +1636,10 @@ export class TrainerScene3D {
 
     // Middle Tabletop Desk specifically for AC Trainer (matching workbench table in Gambar 1)
     if (isAc) {
-      const tableGeo = new THREE.BoxGeometry(boardWidth + 0.5, 0.38, 4.4);
+      const tableGeo = new THREE.BoxGeometry(boardWidth + 0.3, 0.38, 3.6);
       const tableMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.55, metalness: 0.1 });
       const table = new THREE.Mesh(tableGeo, tableMat);
-      table.position.set(0, -3.8, 1.8);
+      table.position.set(0, -3.8, 1.5);
       table.receiveShadow = true;
       this._addInkedOutline(table, 0x334155, 0.8);
       this.standGroup.add(table);
@@ -1709,7 +1709,7 @@ export class TrainerScene3D {
 
     // 3D Digital Multimeter unit sitting on the shelf (or middle tabletop desk for AC Trainer)
     if (isAc) {
-      this._build3DMultimeterOnShelf(9.2, -3.61, 2.2);
+      this._build3DMultimeterOnShelf(8.6, -3.61, 1.95);
     } else {
       this._build3DMultimeterOnShelf(Math.min(1.0, boardWidth * 0.05), SHELF_TOP_Y, 1.05);
     }
@@ -5539,13 +5539,13 @@ export class TrainerScene3D {
     const isAc = Boolean(this.module?.category?.includes('AC') || this.module?.id?.startsWith('ac'));
     const boardWidth = this.module?.boardSize?.[0] || 21;
     const isWide = boardWidth >= 23;
-    const frontZ = isAc ? 24.2 : (isWide ? 25.4 : 22.0);
-    const shiftX = isAc ? 0.0 : (isWide ? 0.85 : 0.35);
+    const frontZ = isAc ? 28.6 : (isWide ? 25.4 : 22.0);
+    const shiftX = isAc ? 1.15 : (isWide ? 0.85 : 0.35);
 
     if (presetName === 'front') {
       if (isAc) {
-        this.camera.position.set(0.0, -1.3, frontZ);
-        this.controls.target.set(0.0, -1.0, 0.8);
+        this.camera.position.set(shiftX, -1.25, frontZ);
+        this.controls.target.set(shiftX, -0.95, 0.8);
       } else {
         this.camera.position.set(shiftX, -2.2, frontZ);
         this.controls.target.set(shiftX, -1.7, 0.6);

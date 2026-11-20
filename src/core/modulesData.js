@@ -36,13 +36,13 @@ const AC_BATTERY_COMPONENT = {
   type: 'battery_12v',
   title: 'Aki 12V 45Ah',
   subtitle: 'Meja Trainer AC',
-  pos: [-10.3, -2.76, 2.35],
+  pos: [-9.8, -2.76, 2.05],
   size: [3.3, 1.7, 2.0],
 };
 
 const AC_BATTERY_PINS = [
-  makePin('BAT_POS', 'AKI +', 'ACCU_12V', -9.4, -1.85, 2.75, 'red', 'battery_post'),
-  makePin('BAT_NEG', 'AKI -', 'ACCU_12V', -11.2, -1.85, 2.75, 'black', 'battery_post'),
+  makePin('BAT_POS', 'AKI +', 'ACCU_12V', -8.9, -1.85, 2.45, 'red', 'battery_post'),
+  makePin('BAT_NEG', 'AKI -', 'ACCU_12V', -10.7, -1.85, 2.45, 'black', 'battery_post'),
 ];
 
 const TABLE_BATTERY_COMPONENT = COMMON_BATTERY_COMPONENT;
@@ -1897,8 +1897,8 @@ export const MODULES = [
         id: 'PRESSURE_SWITCH',
         type: 'pressure_switch_dual',
         title: 'Pressure Switch',
-        pos: [9.80, 4.05, 0.45],
-        size: [3.9, 2.30, 0.4],
+        pos: [9.65, 4.05, 0.45],
+        size: [3.6, 2.30, 0.4],
         states: ['CLOSED', 'OPEN'],
         defaultState: 'CLOSED',
       },
@@ -1928,8 +1928,8 @@ export const MODULES = [
         id: 'MOTOR_DRIVE_AC',
         type: 'motor_ac_drive',
         title: 'Motor Penggerak Mesin (Engine Drive)',
-        pos: [7.90, 1.45, 0.45],
-        size: [7.7, 2.30, 0.4],
+        pos: [7.75, 1.45, 0.45],
+        size: [7.4, 2.30, 0.4],
         states: ['OFF', 'IDLE_800', 'MED_1500', 'HIGH_2200'],
         defaultState: 'IDLE_800',
       },
@@ -1952,8 +1952,8 @@ export const MODULES = [
         id: 'DIGITAL_TEMP_UNIT',
         type: 'digital_temp_unit',
         title: 'Display Suhu Digital (T1, T2, T3)',
-        pos: [7.70, -1.12, 0.45],
-        size: [8.1, 2.32, 0.5],
+        pos: [7.55, -1.12, 0.45],
+        size: [7.8, 2.32, 0.5],
       },
       // --- ROW 4 ANGLED CONSOLE (hinged at y=-2.40, z=0.225, tiltX=-0.78) ---
       {
@@ -1986,8 +1986,8 @@ export const MODULES = [
       { id: 'AC_SW_OUT', label: 'AC OUT', pos: [3.75, 3.20, 0.45], color: 'red', componentId: 'SW_AC_PUSH' },
       { id: 'TH_IN', label: 'TH IN', pos: [5.45, 3.20, 0.45], color: 'yellow', componentId: 'THERMOSTAT_AC' },
       { id: 'TH_OUT', label: 'TH OUT', pos: [6.75, 3.20, 0.45], color: 'yellow', componentId: 'THERMOSTAT_AC' },
-      { id: 'PS_IN', label: 'PS IN', pos: [9.10, 3.20, 0.45], color: 'blue', componentId: 'PRESSURE_SWITCH' },
-      { id: 'PS_OUT', label: 'PS OUT', pos: [10.50, 3.20, 0.45], color: 'blue', componentId: 'PRESSURE_SWITCH' },
+      { id: 'PS_IN', label: 'PS IN', pos: [8.95, 3.20, 0.45], color: 'blue', componentId: 'PRESSURE_SWITCH' },
+      { id: 'PS_OUT', label: 'PS OUT', pos: [10.35, 3.20, 0.45], color: 'blue', componentId: 'PRESSURE_SWITCH' },
       // Row 2 pins (y = +0.60, z = 0.45)
       { id: 'RES_IN', label: 'OUT', pos: [-10.5, 0.60, 0.45], color: 'red', componentId: 'RESISTOR_BLOWER' },
       { id: 'RES_LOW', label: 'L', pos: [-9.3, 0.60, 0.45], color: 'yellow', componentId: 'RESISTOR_BLOWER' },
@@ -2006,8 +2006,8 @@ export const MODULES = [
       { id: 'MTR_BLW_GND', label: 'BLW (-)', pos: [-5.2, -1.96, 0.45], color: 'black', componentId: 'EVAPORATOR_UNIT' },
       { id: 'CLUTCH_POS', label: 'CLU (+)', pos: [-0.7, -1.96, 0.45], color: 'red', componentId: 'MANIFOLD_GAUGE' },
       { id: 'CLUTCH_GND', label: 'CLU (-)', pos: [1.1, -1.96, 0.45], color: 'black', componentId: 'MANIFOLD_GAUGE' },
-      { id: 'FAN_POS', label: 'FAN (+)', pos: [6.7, -1.96, 0.45], color: 'red', componentId: 'DIGITAL_TEMP_UNIT' },
-      { id: 'FAN_GND', label: 'FAN (-)', pos: [8.7, -1.96, 0.45], color: 'black', componentId: 'DIGITAL_TEMP_UNIT' },
+      { id: 'FAN_POS', label: 'FAN (+)', pos: [6.55, -1.96, 0.45], color: 'red', componentId: 'DIGITAL_TEMP_UNIT' },
+      { id: 'FAN_GND', label: 'FAN (-)', pos: [8.55, -1.96, 0.45], color: 'black', componentId: 'DIGITAL_TEMP_UNIT' },
       // Row 4 Angled Console Ground Bus pins
       { id: 'BUS31_1', label: '31 (1)', pos: [-2.7, -3.22, 1.08], color: 'black', componentId: 'GND_BUS_31', surface: 'console', tiltX: -0.78 },
       { id: 'BUS31_2', label: '31 (2)', pos: [-0.9, -3.22, 1.08], color: 'black', componentId: 'GND_BUS_31', surface: 'console', tiltX: -0.78 },

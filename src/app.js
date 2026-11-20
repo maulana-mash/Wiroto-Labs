@@ -1,10 +1,10 @@
-import { CABLE_TYPES, CableManager } from './core/cableEngine.js?v=20261120_02';
-import { MODULES, getModuleById } from './core/modulesData.js?v=20261120_02';
-import { CircuitSolver } from './core/circuitSolver.js?v=20261120_02';
-import { SoundEngine } from './audio/soundEngine.js?v=20261120_02';
-import { TrainerScene3D } from './scene/trainerScene3D.js?v=20261120_02';
-import { ComponentInspector3D, INSPECTOR_COMPONENTS } from './scene/componentInspector3D.js?v=20261120_02';
-import { MULTIMETER_MODES, MultimeterEngine } from './core/multimeterEngine.js?v=20261120_02';
+import { CABLE_TYPES, CableManager } from './core/cableEngine.js?v=20261120_03';
+import { MODULES, getModuleById } from './core/modulesData.js?v=20261120_03';
+import { CircuitSolver } from './core/circuitSolver.js?v=20261120_03';
+import { SoundEngine } from './audio/soundEngine.js?v=20261120_03';
+import { TrainerScene3D } from './scene/trainerScene3D.js?v=20261120_03';
+import { ComponentInspector3D, INSPECTOR_COMPONENTS } from './scene/componentInspector3D.js?v=20261120_03';
+import { MULTIMETER_MODES, MultimeterEngine } from './core/multimeterEngine.js?v=20261120_03';
 
 // Short sidebar group names (full category text stays in module data)
 const GROUP_SHORT = {
@@ -750,10 +750,6 @@ class AutomotiveBenchApp {
     this.elModuleTitle.textContent = this.activeModule.title;
     this.elModuleDesc.textContent = this.activeModule.description;
 
-    this.scene3D.loadModule(this.activeModule);
-    this._renderSwitchesBar();
-    this._syncAfterWireChange();
-
     const isAcModule = moduleId.startsWith('ac');
     const hasManifoldGauge = (this.activeModule.components || []).some(
       (c) => c.type === 'manifold_gauge_unit' || c.type === 'digital_temp_unit'
@@ -761,6 +757,14 @@ class AutomotiveBenchApp {
     if (this.elBtnToggleManifold) {
       this.elBtnToggleManifold.hidden = !isAcModule;
     }
+
+    if (typeof this.scene3D._onResize === 'function') {
+      this.scene3D._onResize();
+    }
+    this.scene3D.loadModule(this.activeModule);
+    this._renderSwitchesBar();
+    this._syncAfterWireChange();
+
     if (this._setManifoldHudVisible) {
       // Automatically open Manifold Gauge HUD on AC03 (or any module with Manifold Gauge) and hide on Body modules
       this._setManifoldHudVisible(Boolean(isAcModule && hasManifoldGauge));
