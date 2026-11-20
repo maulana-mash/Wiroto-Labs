@@ -2636,7 +2636,7 @@ export class TrainerScene3D {
     const beamLen = 3.2;
     const beamGeo = new THREE.CylinderGeometry(unitH * 0.28, unitH * 1.05, beamLen, 24, 1, true);
     beamGeo.translate(0, -beamLen / 2, 0);
-    beamGeo.rotateX(Math.PI / 2); // Base at z=0, expanding outward toward +Z
+    beamGeo.rotateX(-Math.PI / 2); // Base at z=0, expanding outward toward +Z (front of trainer)
     const beamMat = new THREE.MeshBasicMaterial({
       map: this._getBeamConeTexture(),
       color: 0xfef3c7,
