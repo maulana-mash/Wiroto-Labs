@@ -1709,7 +1709,7 @@ export class TrainerScene3D {
 
     // 3D Digital Multimeter unit sitting on the shelf (or middle tabletop desk for AC Trainer)
     if (isAc) {
-      this._build3DMultimeterOnShelf(8.6, -3.61, 1.95);
+      this._build3DMultimeterOnShelf(9.8, -3.61, 1.95);
     } else {
       this._build3DMultimeterOnShelf(Math.min(1.0, boardWidth * 0.05), SHELF_TOP_Y, 1.05);
     }
