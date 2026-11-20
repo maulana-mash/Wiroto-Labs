@@ -38,6 +38,10 @@ export class SoundEngine {
     }
   }
 
+  playToggleClick() {
+    this.playPlugSnap(false);
+  }
+
   playPlugSnap(isStack = false) {
     if (!this.effectsEnabled) return;
     const ctx = this._ensureContext();

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import {
   SCALE_CM_PER_UNIT,
   computePinDistanceCm,
@@ -106,8 +107,8 @@ export class TrainerScene3D {
     this.lastSyncedExplode = 0;
     this.wobbleAmount = 0.25;
     this.environmentPreset = 'kelas_tkr';
-    // Classic SMK Trainer warm ivory/yellow board tone
-    this.boardThemeHex = 0xf4f1e6;
+    // Eye-comfortable matte ivory board tone (no glare under PBR lights)
+    this.boardThemeHex = 0xe8e4d8;
     this.clockTime = 0;
     this.textureCache = new Map();
 
@@ -133,12 +134,22 @@ export class TrainerScene3D {
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 0.80;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.needsUpdate = true;
     this.container.appendChild(this.renderer.domElement);
+
+    // One-time baked PBR studio/workshop reflection environment (calibrated intensity per Suasana)
+    const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.40;
+    pmremGenerator.dispose();
+    this.maxAnisotropy = Math.min(16, this.renderer.capabilities.getMaxAnisotropy() || 4);
 
     // Keep hidden overlay node only for legacy DOM compatibility; all pin & component labels are 3D surface-mounted
     this.labelOverlay = document.createElement('div');
@@ -165,15 +176,18 @@ export class TrainerScene3D {
       RIGHT: null,
     };
 
-    // Warm studio + workshop lighting
-    this.ambientLight = new THREE.AmbientLight(0xfffcf5, 1.38);
+    // Balanced 100% PBR workshop lighting (calibrated per Suasana preset to prevent eye strain)
+    this.ambientLight = new THREE.AmbientLight(0xfffaf0, 0.20);
     this.scene.add(this.ambientLight);
 
-    this.keyLight = new THREE.DirectionalLight(0xfff7e8, 1.48);
+    this.hemiLight = new THREE.HemisphereLight(0xf1f5f9, 0x8b8577, 0.34);
+    this.scene.add(this.hemiLight);
+
+    this.keyLight = new THREE.DirectionalLight(0xfff2dc, 0.85);
     this.keyLight.position.set(10, 16, 22);
     this.keyLight.castShadow = true;
-    this.keyLight.shadow.mapSize.width = 1024;
-    this.keyLight.shadow.mapSize.height = 1024;
+    this.keyLight.shadow.mapSize.width = 2048;
+    this.keyLight.shadow.mapSize.height = 2048;
     this.keyLight.shadow.camera.near = 2;
     this.keyLight.shadow.camera.far = 65;
     const d = 22;
@@ -181,12 +195,12 @@ export class TrainerScene3D {
     this.keyLight.shadow.camera.right = d;
     this.keyLight.shadow.camera.top = d;
     this.keyLight.shadow.camera.bottom = -d;
-    this.keyLight.shadow.bias = -0.0008;
-    this.keyLight.shadow.normalBias = 0.04;
+    this.keyLight.shadow.bias = -0.0005;
+    this.keyLight.shadow.normalBias = 0.03;
     this.scene.add(this.keyLight);
 
-    this.rimLight = new THREE.DirectionalLight(0xdbeafe, 0.6);
-    this.rimLight.position.set(-14, -6, 12);
+    this.rimLight = new THREE.DirectionalLight(0xdbeafe, 0.25);
+    this.rimLight.position.set(-14, -4, 12);
     this.scene.add(this.rimLight);
 
     this.rootGroup = new THREE.Group();
@@ -214,54 +228,19 @@ export class TrainerScene3D {
     this.dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -0.85);
   }
 
-  _addInkedOutline(mesh, color = 0x191917, opacity = 0.82) {
-    if (!mesh || !mesh.geometry) return null;
-    // Tier 3 Filter: Background room objects never need inked line segments
-    if (this._isBuildingEnvironment) return null;
-    if (mesh.userData && mesh.userData.noOutline) return null;
+  _applyTextureCrispness(tex) {
+    if (!tex) return tex;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = this.maxAnisotropy || 8;
+    tex.generateMipmaps = true;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    return tex;
+  }
 
-    // Tier 3 Filter: Skip microscopic mechanical details by naming pattern
-    const name = (mesh.name || '').toLowerCase();
-    if (
-      name.includes('screw') ||
-      name.includes('bolt') ||
-      name.includes('baut') ||
-      name.includes('nut') ||
-      name.includes('mur') ||
-      name.includes('blade') ||
-      name.includes('pin') ||
-      name.includes('cap') ||
-      name.includes('filament') ||
-      name.includes('bulb_glass') ||
-      name.includes('needle') ||
-      name.includes('port')
-    ) {
-      return null;
-    }
-
-    // Tier 3 Filter: Automatically skip sub-parts below 0.38 unit bounding radius
-    if (!mesh.geometry.boundingSphere) {
-      mesh.geometry.computeBoundingSphere();
-    }
-    const bs = mesh.geometry.boundingSphere;
-    if (bs && bs.radius < 0.38) {
-      return null;
-    }
-
-    const edges = new THREE.EdgesGeometry(mesh.geometry, 28);
-    const lineMat = new THREE.LineBasicMaterial({
-      color,
-      transparent: opacity < 1,
-      opacity,
-      toneMapped: false,
-    });
-    const lines = new THREE.LineSegments(edges, lineMat);
-    lines.name = 'inked_outline';
-    // CRITICAL FOR 60 FPS: Disable raycasting on line segments to avoid pointer lag
-    lines.raycast = () => {};
-    lines.frustumCulled = true;
-    mesh.add(lines);
-    return lines;
+  _addInkedOutline() {
+    // Pure 100% PBR realism mode: cartoon inked wire edges disabled (also cuts hundreds of GPU draw calls)
+    return null;
   }
 
   // ============================================================================
@@ -285,10 +264,10 @@ export class TrainerScene3D {
     if (!ctx) return null;
 
     if (style === 'tkr') {
-      // SMK TKR Classroom ceramic tiles
-      ctx.fillStyle = '#d6d3c9';
+      // SMK TKR Classroom warm matte ceramic tiles
+      ctx.fillStyle = '#c9c5ba';
       ctx.fillRect(0, 0, 512, 512);
-      ctx.strokeStyle = '#b8b4a9';
+      ctx.strokeStyle = '#a8a397';
       ctx.lineWidth = 4;
       for (let i = 0; i <= 512; i += 64) {
         ctx.beginPath();
@@ -299,10 +278,10 @@ export class TrainerScene3D {
         ctx.stroke();
       }
     } else if (style === 'workshop') {
-      // Epoxy grey-blue automotive workshop floor
-      ctx.fillStyle = '#475569';
+      // Dark epoxy automotive workshop floor
+      ctx.fillStyle = '#2d3748';
       ctx.fillRect(0, 0, 512, 512);
-      ctx.strokeStyle = '#334155';
+      ctx.strokeStyle = '#1e293b';
       ctx.lineWidth = 5;
       for (let i = 0; i <= 512; i += 128) {
         ctx.beginPath();
@@ -317,14 +296,14 @@ export class TrainerScene3D {
       ctx.fillStyle = '#4d7c0f';
       ctx.fillRect(0, 0, 512, 512);
       for (let i = 0; i < 600; i++) {
-        ctx.fillStyle = i % 2 === 0 ? '#65a30d' : '#3f6212';
+        ctx.fillStyle = i % 2 === 0 ? '#5c8a14' : '#3f6212';
         ctx.fillRect((i * 73) % 512, (i * 139) % 512, 6, 6);
       }
     } else {
-      // Clean white studio floor
-      ctx.fillStyle = '#f1f5f9';
+      // Soft neutral matte studio floor (zero glare)
+      ctx.fillStyle = '#d5dce4';
       ctx.fillRect(0, 0, 512, 512);
-      ctx.strokeStyle = '#e2e8f0';
+      ctx.strokeStyle = '#c1cbd6';
       ctx.lineWidth = 2;
       for (let i = 0; i <= 512; i += 64) {
         ctx.beginPath();
@@ -355,18 +334,27 @@ export class TrainerScene3D {
     const floorY = FLOOR_Y - 0.04;
 
     if (presetId === 'polos_putih') {
-      // 1. POLOS PUTIH (Clean White Studio Room)
-      this.scene.background = new THREE.Color(0xf8fafc);
-      this.ambientLight.intensity = 1.48;
-      this.keyLight.intensity = 1.35;
+      // 1. POLOS PUTIH (Soft Glare-Free Neutral Studio)
+      this.scene.background = new THREE.Color(0xcbd3dc);
+      this.renderer.toneMappingExposure = 0.78;
+      this.scene.environmentIntensity = 0.38;
+      this.ambientLight.color.setHex(0xf8fafc);
+      this.ambientLight.intensity = 0.20;
+      this.hemiLight.color.setHex(0xf8fafc);
+      this.hemiLight.groundColor.setHex(0x94a3b8);
+      this.hemiLight.intensity = 0.35;
+      this.keyLight.color.setHex(0xffffff);
+      this.keyLight.intensity = 0.80;
+      this.rimLight.color.setHex(0xdbeafe);
+      this.rimLight.intensity = 0.24;
 
       const floorTex = this._createFloorTileTexture('white');
       const floorGeo = new THREE.PlaneGeometry(110, 110);
       floorGeo.rotateX(-Math.PI / 2);
       const floorMat = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
+        color: 0xd8dfe8,
         map: floorTex,
-        roughness: 0.85,
+        roughness: 0.88,
         metalness: 0.02,
       });
       const floor = new THREE.Mesh(floorGeo, floorMat);
@@ -375,32 +363,42 @@ export class TrainerScene3D {
       this.environmentGroup.add(floor);
 
       // Subtle studio platform pad directly under trainer stand
-      const padGeo = new THREE.BoxGeometry(28, 0.08, 12);
-      const padMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.7 });
+      const padGeo = new THREE.BoxGeometry(30, 0.08, 12.5);
+      const padMat = new THREE.MeshStandardMaterial({ color: 0xc4cdd8, roughness: 0.78 });
       const pad = new THREE.Mesh(padGeo, padMat);
       pad.position.set(0, floorY + 0.04, 1.4);
       pad.receiveShadow = true;
-      this._addInkedOutline(pad, 0x94a3b8, 0.5);
       this.environmentGroup.add(pad);
+
+      this.renderer.shadowMap.needsUpdate = true;
       this._isBuildingEnvironment = false;
       return;
     }
 
     if (presetId === 'lapangan') {
-      // 2. DI LAPANGAN (Outdoor Automotive Practice Yard & Grass Field)
-      this.scene.background = new THREE.Color(0xbae6fd);
-      this.scene.fog = new THREE.Fog(0xbae6fd, 48, 115);
-      this.ambientLight.intensity = 1.5;
-      this.keyLight.intensity = 1.65;
+      // 2. DI LAPANGAN (Soft Overcast Outdoor Practice Yard)
+      this.scene.background = new THREE.Color(0x93b7d4);
+      this.scene.fog = new THREE.Fog(0x93b7d4, 48, 115);
+      this.renderer.toneMappingExposure = 0.84;
+      this.scene.environmentIntensity = 0.45;
+      this.ambientLight.color.setHex(0xf8fafc);
+      this.ambientLight.intensity = 0.24;
+      this.hemiLight.color.setHex(0xdbeafe);
+      this.hemiLight.groundColor.setHex(0x4d7c0f);
+      this.hemiLight.intensity = 0.42;
+      this.keyLight.color.setHex(0xfff7e6);
+      this.keyLight.intensity = 0.96;
+      this.rimLight.color.setHex(0xbae6fd);
+      this.rimLight.intensity = 0.26;
 
       // Wide green grass field
       const grassTex = this._createFloorTileTexture('grass');
       const grassGeo = new THREE.PlaneGeometry(160, 160);
       grassGeo.rotateX(-Math.PI / 2);
       const grassMat = new THREE.MeshStandardMaterial({
-        color: 0x65a30d,
+        color: 0x5c8a14,
         map: grassTex,
-        roughness: 0.9,
+        roughness: 0.92,
       });
       const grass = new THREE.Mesh(grassGeo, grassMat);
       grass.position.set(0, floorY - 0.02, 0);
@@ -408,46 +406,48 @@ export class TrainerScene3D {
       this.environmentGroup.add(grass);
 
       // Paved asphalt practice pad under the trainer stand
-      const padGeo = new THREE.BoxGeometry(34, 0.12, 18);
-      const padMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.85 });
+      const padGeo = new THREE.BoxGeometry(36, 0.12, 18);
+      const padMat = new THREE.MeshStandardMaterial({ color: 0x2f3a47, roughness: 0.88 });
       const pad = new THREE.Mesh(padGeo, padMat);
       pad.position.set(0, floorY + 0.04, 1.5);
       pad.receiveShadow = true;
-      this._addInkedOutline(pad, 0x1e293b, 0.75);
       this.environmentGroup.add(pad);
 
       // Yellow safety border line on asphalt pad
-      const lineGeo = new THREE.BoxGeometry(32.5, 0.13, 16.5);
+      const lineGeo = new THREE.BoxGeometry(34.5, 0.13, 16.5);
       const lineEdges = new THREE.EdgesGeometry(lineGeo);
       const lineSeg = new THREE.LineSegments(
         lineEdges,
-        new THREE.LineBasicMaterial({ color: 0xfacc15 })
+        new THREE.LineBasicMaterial({ color: 0xeab308 })
       );
       lineSeg.position.set(0, floorY + 0.05, 1.5);
       this.environmentGroup.add(lineSeg);
 
-      // 4 Orange traffic cones at the corners of the outdoor practice pad
-      const coneMat = new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.45 });
-      const baseMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.7 });
+      // 4 Orange traffic cones with white reflective collar bands
+      const coneMat = new THREE.MeshStandardMaterial({ color: 0xea580c, roughness: 0.48 });
+      const bandMat = new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.35 });
+      const baseMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.75 });
       for (const [cx, cz] of [
-        [-14.5, -5.5],
-        [14.5, -5.5],
-        [-14.5, 8.5],
-        [14.5, 8.5],
+        [-15.5, -5.5],
+        [15.5, -5.5],
+        [-15.5, 8.5],
+        [15.5, 8.5],
       ]) {
         const cGroup = new THREE.Group();
         cGroup.position.set(cx, floorY + 0.1, cz);
-        const cb = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.12, 0.9), baseMat);
-        const cc = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.36, 1.15, 14), coneMat);
+        const cb = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.12, 0.92), baseMat);
+        const cc = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.36, 1.15, 16), coneMat);
         cc.position.y = 0.62;
-        this._addInkedOutline(cc);
-        cGroup.add(cb, cc);
+        cc.castShadow = true;
+        const band = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.23, 0.22, 16), bandMat);
+        band.position.y = 0.74;
+        cGroup.add(cb, cc, band);
         this.environmentGroup.add(cGroup);
       }
 
-      // Stylized trees around the field perimeter
-      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.8 });
-      const foliageMat = new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.75 });
+      // Trees around the field perimeter
+      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b3a19, roughness: 0.85 });
+      const foliageMat = new THREE.MeshStandardMaterial({ color: 0x166534, roughness: 0.78 });
       for (const [tx, tz] of [
         [-26, -18],
         [-12, -22],
@@ -460,126 +460,185 @@ export class TrainerScene3D {
         trunk.position.y = 2.25;
         const crown = new THREE.Mesh(new THREE.DodecahedronGeometry(2.8, 1), foliageMat);
         crown.position.y = 5.6;
-        this._addInkedOutline(trunk);
-        this._addInkedOutline(crown, 0x14532d, 0.5);
         tree.add(trunk, crown);
         this.environmentGroup.add(tree);
       }
+
+      this.renderer.shadowMap.needsUpdate = true;
       this._isBuildingEnvironment = false;
       return;
     }
 
     if (presetId === 'bengkel_mobil') {
-      // 3. BENGKEL MOBIL (Automotive Service Workshop Room)
-      this.scene.background = new THREE.Color(0xcbd5e1);
-      this.ambientLight.intensity = 1.35;
-      this.keyLight.intensity = 1.45;
+      // 3. BENGKEL MOBIL (Moody Dim Automotive Service Garage — highlights headlamp & lamp beams!)
+      this.scene.background = new THREE.Color(0x1e2633);
+      this.scene.fog = new THREE.Fog(0x1e2633, 32, 78);
+      this.renderer.toneMappingExposure = 0.64;
+      this.scene.environmentIntensity = 0.26;
+      this.ambientLight.color.setHex(0xdbeafe);
+      this.ambientLight.intensity = 0.12;
+      this.hemiLight.color.setHex(0x94a3b8);
+      this.hemiLight.groundColor.setHex(0x1e293b);
+      this.hemiLight.intensity = 0.20;
+      this.keyLight.color.setHex(0xfef3c7);
+      this.keyLight.intensity = 0.68;
+      this.rimLight.color.setHex(0x93c5fd);
+      this.rimLight.intensity = 0.32;
 
       const floorTex = this._createFloorTileTexture('workshop');
-      const floorGeo = new THREE.PlaneGeometry(80, 60);
+      const floorGeo = new THREE.PlaneGeometry(82, 62);
       floorGeo.rotateX(-Math.PI / 2);
       const floorMat = new THREE.MeshStandardMaterial({
-        color: 0x64748b,
+        color: 0x3b4758,
         map: floorTex,
-        roughness: 0.65,
-        metalness: 0.1,
+        roughness: 0.52,
+        metalness: 0.14,
       });
       const floor = new THREE.Mesh(floorGeo, floorMat);
       floor.position.set(0, floorY, 0);
       floor.receiveShadow = true;
       this.environmentGroup.add(floor);
 
-      // Yellow safety work-bay border around trainer stand
-      const bayGeo = new THREE.PlaneGeometry(29, 12);
+      // Dark slate work-bay pad + safety yellow stripes
+      const bayGeo = new THREE.PlaneGeometry(31, 12.5);
       bayGeo.rotateX(-Math.PI / 2);
-      const bayMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.6 });
+      const bayMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.58 });
       const bay = new THREE.Mesh(bayGeo, bayMat);
       bay.position.set(0, floorY + 0.02, 1.5);
       bay.receiveShadow = true;
       this.environmentGroup.add(bay);
 
-      const stripeMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
+      const stripeMat = new THREE.MeshBasicMaterial({ color: 0xd97706 });
       for (const [sx, sy, sw, sd] of [
-        [0, -4.5, 29.2, 0.25],
-        [0, 7.5, 29.2, 0.25],
-        [-14.5, 1.5, 0.25, 12.2],
-        [14.5, 1.5, 0.25, 12.2],
+        [0, -4.75, 31.2, 0.22],
+        [0, 7.75, 31.2, 0.22],
+        [-15.5, 1.5, 0.22, 12.7],
+        [15.5, 1.5, 0.22, 12.7],
       ]) {
         const st = new THREE.Mesh(new THREE.PlaneGeometry(sw, sd).rotateX(-Math.PI / 2), stripeMat);
         st.position.set(sx, floorY + 0.03, sy);
         this.environmentGroup.add(st);
       }
 
-      // Back & side workshop walls
-      const backWallGeo = new THREE.BoxGeometry(72, 28, 0.6);
-      const wallMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.8 });
-      const backWall = new THREE.Mesh(backWallGeo, wallMat);
+      // Industrial garage back wall (charcoal slate upper + dark steel lower wainscot)
+      const wallMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.85 });
+      const backWall = new THREE.Mesh(new THREE.BoxGeometry(74, 28, 0.6), wallMat);
       backWall.position.set(0, floorY + 14, -12.5);
       backWall.receiveShadow = true;
-      this._addInkedOutline(backWall);
       this.environmentGroup.add(backWall);
 
-      // Dark blue-grey lower wainscot stripe on back wall
-      const wainGeo = new THREE.BoxGeometry(72, 6.5, 0.68);
-      const wainMat = new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.6 });
-      const wain = new THREE.Mesh(wainGeo, wainMat);
-      wain.position.set(0, floorY + 3.25, -12.48);
+      const wainMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.65 });
+      const wain = new THREE.Mesh(new THREE.BoxGeometry(74, 6.8, 0.68), wainMat);
+      wain.position.set(0, floorY + 3.4, -12.48);
       this.environmentGroup.add(wain);
 
+      // Accent amber stripe along wall wainscot
+      const wallStripe = new THREE.Mesh(
+        new THREE.BoxGeometry(74, 0.24, 0.72),
+        new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.45 })
+      );
+      wallStripe.position.set(0, floorY + 6.9, -12.46);
+      this.environmentGroup.add(wallStripe);
+
+      // Overhead industrial shop bay LED lamp fixtures (subtle warm-white ceiling strips)
+      const lampHousingMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.6, roughness: 0.4 });
+      const lampTubeMat = new THREE.MeshBasicMaterial({ color: 0xfef3c7 });
+      for (const lx of [-11, 0, 11]) {
+        const housing = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.25, 0.75), lampHousingMat);
+        housing.position.set(lx, floorY + 23.0, -3.5);
+        this.environmentGroup.add(housing);
+        const tube = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.08, 0.45), lampTubeMat);
+        tube.position.set(lx, floorY + 22.84, -3.5);
+        this.environmentGroup.add(tube);
+      }
+
       // Workshop banner sign on back wall
-      const sign = this._createBlueHeaderBadge('BENGKEL SERVIS KELISTRIKAN OTOMOTIF', 14.0, 1.4);
-      sign.position.set(0, floorY + 18.5, -12.1);
+      const sign = this._createBlueHeaderBadge('BENGKEL SERVIS KELISTRIKAN OTOMOTIF', 14.5, 1.35);
+      sign.position.set(0, floorY + 18.8, -12.1);
       this.environmentGroup.add(sign);
 
-      // Red Mechanic Tool Cabinet on the left side of the workshop
+      // Rolling Red Mechanic Tool Chest on left side (with chrome drawer handles & casters)
       const cabGroup = new THREE.Group();
-      cabGroup.position.set(-18.5, floorY, -7.5);
+      cabGroup.position.set(-19.2, floorY, -7.2);
       const cabBody = new THREE.Mesh(
-        new THREE.BoxGeometry(4.2, 5.2, 2.4),
-        new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.4, metalness: 0.3 })
+        new THREE.BoxGeometry(4.4, 5.0, 2.4),
+        new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.36, metalness: 0.32 })
       );
-      cabBody.position.y = 2.6;
-      this._addInkedOutline(cabBody);
+      cabBody.position.y = 2.85;
+      cabBody.castShadow = true;
       cabGroup.add(cabBody);
+      const cabTopMat = new THREE.Mesh(
+        new THREE.BoxGeometry(4.46, 0.12, 2.46),
+        new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.8 })
+      );
+      cabTopMat.position.y = 5.4;
+      cabGroup.add(cabTopMat);
+      const handleMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.85, roughness: 0.2 });
       for (let dIdx = 0; dIdx < 4; dIdx++) {
         const drw = new THREE.Mesh(
-          new THREE.BoxGeometry(3.7, 0.85, 0.12),
-          new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 })
+          new THREE.BoxGeometry(3.85, 0.82, 0.12),
+          new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.38, metalness: 0.25 })
         );
-        drw.position.set(0, 1.0 + dIdx * 1.05, 1.22);
-        this._addInkedOutline(drw);
+        drw.position.set(0, 1.15 + dIdx * 1.05, 1.22);
         cabGroup.add(drw);
+        const hnd = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.1, 0.14), handleMat);
+        hnd.position.set(0, 1.42 + dIdx * 1.05, 1.3);
+        cabGroup.add(hnd);
       }
       this.environmentGroup.add(cabGroup);
 
-      // 2-Post Car Lift on the right side of the workshop
-      const liftMat = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.4, metalness: 0.35 });
-      for (const lx of [16.5, 23.5]) {
-        const post = new THREE.Mesh(new THREE.BoxGeometry(0.9, 11.5, 0.9), liftMat);
-        post.position.set(lx, floorY + 5.75, -7.5);
-        this._addInkedOutline(post);
+      // Detailed 2-Post Hydraulic Car Lift on right side
+      const liftMat = new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.38, metalness: 0.45 });
+      const liftSteelMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.35, metalness: 0.72 });
+      for (const [idx, lx] of [17.0, 24.0].entries()) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.92, 12.2, 0.92), liftMat);
+        post.position.set(lx, floorY + 6.1, -7.5);
+        post.castShadow = true;
         this.environmentGroup.add(post);
+        // Base flange plate
+        const basePlate = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.14, 1.6), liftSteelMat);
+        basePlate.position.set(lx, floorY + 0.07, -7.5);
+        this.environmentGroup.add(basePlate);
+        // Hydraulic carriage + swinging lift arm
+        const carriage = new THREE.Mesh(new THREE.BoxGeometry(1.06, 1.6, 1.06), liftSteelMat);
+        carriage.position.set(lx, floorY + 2.4, -7.5);
+        this.environmentGroup.add(carriage);
+        const dir = idx === 0 ? 1 : -1;
+        const liftArm = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.24, 0.32), liftSteelMat);
+        liftArm.position.set(lx + dir * 1.4, floorY + 2.0, -6.9);
+        liftArm.rotation.y = dir * 0.22;
+        this.environmentGroup.add(liftArm);
       }
-      const crossBar = new THREE.Mesh(new THREE.BoxGeometry(7.9, 0.6, 0.9), liftMat);
-      crossBar.position.set(20.0, floorY + 11.3, -7.5);
-      this._addInkedOutline(crossBar);
+      const crossBar = new THREE.Mesh(new THREE.BoxGeometry(8.0, 0.62, 0.92), liftMat);
+      crossBar.position.set(20.5, floorY + 12.0, -7.5);
       this.environmentGroup.add(crossBar);
+
+      this.renderer.shadowMap.needsUpdate = true;
       this._isBuildingEnvironment = false;
       return;
     }
 
-    // 4. BENGKEL KELAS TKR (Default — Authentic Indonesian SMK TKR Lab Room like Photo 2)
-    this.scene.background = new THREE.Color(0xdbe7df);
-    this.ambientLight.intensity = 1.4;
-    this.keyLight.intensity = 1.45;
+    // 4. BENGKEL KELAS TKR (Default — Warm Shaded Indonesian SMK TKR Lab Room, Eye-Comfortable!)
+    this.scene.background = new THREE.Color(0xc3cec7);
+    this.renderer.toneMappingExposure = 0.80;
+    this.scene.environmentIntensity = 0.40;
+    this.ambientLight.color.setHex(0xfffaf0);
+    this.ambientLight.intensity = 0.20;
+    this.hemiLight.color.setHex(0xf1f5f9);
+    this.hemiLight.groundColor.setHex(0x8b8577);
+    this.hemiLight.intensity = 0.34;
+    this.keyLight.color.setHex(0xfff2dc);
+    this.keyLight.intensity = 0.85;
+    this.rimLight.color.setHex(0xdbeafe);
+    this.rimLight.intensity = 0.25;
 
     const floorTex = this._createFloorTileTexture('tkr');
-    const floorGeo = new THREE.PlaneGeometry(76, 56);
+    const floorGeo = new THREE.PlaneGeometry(78, 58);
     floorGeo.rotateX(-Math.PI / 2);
     const floorMat = new THREE.MeshStandardMaterial({
-      color: 0xe7e5dc,
+      color: 0xd0ccc2,
       map: floorTex,
-      roughness: 0.72,
+      roughness: 0.78,
     });
     const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.position.set(0, floorY, 0);
@@ -587,71 +646,87 @@ export class TrainerScene3D {
     this.environmentGroup.add(floor);
 
     // Yellow safety practice zone border on classroom floor
-    const stripeMat = new THREE.MeshBasicMaterial({ color: 0xeab308 });
+    const stripeMat = new THREE.MeshBasicMaterial({ color: 0xca8a04 });
     for (const [sx, sy, sw, sd] of [
-      [0, -4.2, 28.0, 0.22],
-      [0, 7.2, 28.0, 0.22],
-      [-14.0, 1.5, 0.22, 11.6],
-      [14.0, 1.5, 0.22, 11.6],
+      [0, -4.4, 30.0, 0.22],
+      [0, 7.4, 30.0, 0.22],
+      [-15.0, 1.5, 0.22, 12.0],
+      [15.0, 1.5, 0.22, 12.0],
     ]) {
       const st = new THREE.Mesh(new THREE.PlaneGeometry(sw, sd).rotateX(-Math.PI / 2), stripeMat);
       st.position.set(sx, floorY + 0.02, sy);
       this.environmentGroup.add(st);
     }
 
-    // Back wall of SMK TKR Lab (Warm cream upper wall + classic SMK green lower wall)
+    // Back wall of SMK TKR Lab (Warm muted cream upper wall + calm SMK green lower wainscot)
     const backWall = new THREE.Mesh(
-      new THREE.BoxGeometry(70, 26, 0.6),
-      new THREE.MeshStandardMaterial({ color: 0xf5f3eb, roughness: 0.82 })
+      new THREE.BoxGeometry(72, 26, 0.6),
+      new THREE.MeshStandardMaterial({ color: 0xd8d4c8, roughness: 0.86 })
     );
     backWall.position.set(0, floorY + 13, -11.5);
     backWall.receiveShadow = true;
-    this._addInkedOutline(backWall);
     this.environmentGroup.add(backWall);
 
     const greenWainscot = new THREE.Mesh(
-      new THREE.BoxGeometry(70, 6.8, 0.66),
-      new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.68 })
+      new THREE.BoxGeometry(72, 6.8, 0.66),
+      new THREE.MeshStandardMaterial({ color: 0x245940, roughness: 0.72 })
     );
     greenWainscot.position.set(0, floorY + 3.4, -11.46);
-    this._addInkedOutline(greenWainscot);
     this.environmentGroup.add(greenWainscot);
 
-    // Classroom Whiteboard on the back wall
+    // Overhead classroom fluorescent ceiling housings
+    const ceilFixMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.4, roughness: 0.5 });
+    const ceilTubeMat = new THREE.MeshBasicMaterial({ color: 0xf8fafc });
+    for (const lx of [-10, 0, 10]) {
+      const fix = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.22, 0.65), ceilFixMat);
+      fix.position.set(lx, floorY + 23.2, -3.0);
+      this.environmentGroup.add(fix);
+      const tube = new THREE.Mesh(new THREE.BoxGeometry(6.0, 0.06, 0.35), ceilTubeMat);
+      tube.position.set(lx, floorY + 23.06, -3.0);
+      this.environmentGroup.add(tube);
+    }
+
+    // Classroom Whiteboard with marker tray on back wall
     const wbFrame = new THREE.Mesh(
       new THREE.BoxGeometry(15.5, 6.2, 0.22),
-      new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.5, roughness: 0.4 })
+      new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.55, roughness: 0.38 })
     );
     wbFrame.position.set(0, floorY + 15.2, -11.1);
-    this._addInkedOutline(wbFrame);
     this.environmentGroup.add(wbFrame);
 
     const wbSurface = new THREE.Mesh(
       new THREE.BoxGeometry(14.9, 5.6, 0.26),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.25 })
+      new THREE.MeshStandardMaterial({ color: 0xeaeef2, roughness: 0.38 })
     );
     wbSurface.position.set(0, floorY + 15.2, -11.08);
     this.environmentGroup.add(wbSurface);
+
+    const wbTray = new THREE.Mesh(
+      new THREE.BoxGeometry(6.5, 0.16, 0.38),
+      new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.6, roughness: 0.3 })
+    );
+    wbTray.position.set(0, floorY + 12.15, -10.92);
+    this.environmentGroup.add(wbTray);
 
     const labBanner = this._createBlueHeaderBadge(
       'LAB PRAKTIK TEKNIK KENDARAAN RINGAN (TKR)',
       13.5,
       1.15
     );
-    labBanner.position.set(0, floorY + 19.4, -11.05);
+    labBanner.position.set(0, floorY + 21.6, -11.05);
     this.environmentGroup.add(labBanner);
 
-    // Side wooden practice workbench in the TKR classroom
+    // Side wooden practice workbench + tool pegboard in the TKR classroom
     const benchGroup = new THREE.Group();
-    benchGroup.position.set(-18.5, floorY, -6.8);
+    benchGroup.position.set(-19.2, floorY, -6.8);
     const benchTop = new THREE.Mesh(
-      new THREE.BoxGeometry(5.5, 0.35, 3.2),
-      new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.65 })
+      new THREE.BoxGeometry(5.6, 0.35, 3.2),
+      new THREE.MeshStandardMaterial({ color: 0x92400e, roughness: 0.68 })
     );
     benchTop.position.y = 3.2;
-    this._addInkedOutline(benchTop);
+    benchTop.castShadow = true;
     benchGroup.add(benchTop);
-    const legMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 });
+    const legMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.55, metalness: 0.4 });
     for (const [lx, lz] of [
       [-2.4, -1.3],
       [2.4, -1.3],
@@ -660,10 +735,18 @@ export class TrainerScene3D {
     ]) {
       const leg = new THREE.Mesh(new THREE.BoxGeometry(0.25, 3.2, 0.25), legMat);
       leg.position.set(lx, 1.6, lz);
-      this._addInkedOutline(leg);
       benchGroup.add(leg);
     }
+    // Lower workbench shelf
+    const benchShelf = new THREE.Mesh(
+      new THREE.BoxGeometry(5.2, 0.16, 2.8),
+      new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.75 })
+    );
+    benchShelf.position.y = 0.85;
+    benchGroup.add(benchShelf);
     this.environmentGroup.add(benchGroup);
+
+    this.renderer.shadowMap.needsUpdate = true;
     this._isBuildingEnvironment = false;
   }
 
@@ -677,105 +760,124 @@ export class TrainerScene3D {
 
     if (typeof document === 'undefined') return null;
     const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 128;
+    canvas.width = 512;
+    canvas.height = 256;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
     if (style === 'headlamp') {
-      const grad = ctx.createLinearGradient(0, 0, 0, 128);
-      grad.addColorStop(0, '#cfd8e3');
-      grad.addColorStop(0.5, '#f1f5f9');
-      grad.addColorStop(1, '#cbd5e1');
+      // Crystal clear automotive Fresnel headlamp optics (subtle vertical glass flutes, not dark gray)
+      const grad = ctx.createLinearGradient(0, 0, 0, 256);
+      grad.addColorStop(0, '#f8fafc');
+      grad.addColorStop(0.5, '#ffffff');
+      grad.addColorStop(1, '#e2e8f0');
       ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, 256, 128);
+      ctx.fillRect(0, 0, 512, 256);
 
-      for (let x = 0; x < 256; x += 6) {
-        ctx.fillStyle = x % 12 === 0 ? 'rgba(255,255,255,0.55)' : 'rgba(71,85,105,0.28)';
-        ctx.fillRect(x, 4, 3, 120);
+      for (let x = 0; x < 512; x += 8) {
+        ctx.fillStyle = x % 16 === 0 ? 'rgba(255,255,255,0.85)' : 'rgba(148,163,184,0.22)';
+        ctx.fillRect(x, 6, 4, 244);
       }
-      ctx.strokeStyle = 'rgba(51,65,85,0.35)';
+      // Subtle horizontal optical zone refractors
+      ctx.strokeStyle = 'rgba(100,116,139,0.22)';
       ctx.lineWidth = 2;
-      for (const y of [32, 64, 96]) {
+      for (const y of [68, 128, 188]) {
         ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(256, y);
+        ctx.moveTo(8, y);
+        ctx.lineTo(504, y);
         ctx.stroke();
       }
+      // Low-beam prism diagonal
+      ctx.beginPath();
+      ctx.moveTo(256, 128);
+      ctx.lineTo(440, 72);
+      ctx.stroke();
     } else if (style === 'amber') {
-      const grad = ctx.createLinearGradient(0, 0, 256, 128);
+      const grad = ctx.createLinearGradient(0, 0, 512, 256);
       grad.addColorStop(0, '#f59e0b');
       grad.addColorStop(0.5, '#fbbf24');
       grad.addColorStop(1, '#d97706');
       ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, 256, 128);
+      ctx.fillRect(0, 0, 512, 256);
 
-      for (let y = 0; y < 128; y += 8) {
-        ctx.fillStyle = y % 16 === 0 ? 'rgba(255,255,255,0.35)' : 'rgba(120,53,15,0.3)';
-        ctx.fillRect(0, y, 256, 4);
+      for (let y = 0; y < 256; y += 12) {
+        ctx.fillStyle = y % 24 === 0 ? 'rgba(255,255,255,0.34)' : 'rgba(120,53,15,0.24)';
+        ctx.fillRect(0, y, 512, 5);
+      }
+      for (let x = 0; x < 512; x += 16) {
+        ctx.fillStyle = 'rgba(255,255,255,0.14)';
+        ctx.fillRect(x, 0, 3, 256);
       }
     } else if (style === 'red') {
-      const grad = ctx.createLinearGradient(0, 0, 0, 128);
+      const grad = ctx.createLinearGradient(0, 0, 0, 256);
       grad.addColorStop(0, '#dc2626');
       grad.addColorStop(0.5, '#ef4444');
       grad.addColorStop(1, '#991b1b');
       ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, 256, 128);
+      ctx.fillRect(0, 0, 512, 256);
 
-      for (let x = 0; x < 256; x += 8) {
-        ctx.fillStyle = x % 16 === 0 ? 'rgba(255,255,255,0.28)' : 'rgba(69,10,10,0.35)';
-        ctx.fillRect(x, 0, 4, 128);
+      for (let x = 0; x < 512; x += 12) {
+        ctx.fillStyle = x % 24 === 0 ? 'rgba(255,255,255,0.28)' : 'rgba(69,10,10,0.3)';
+        ctx.fillRect(x, 0, 5, 256);
+      }
+      for (let y = 0; y < 256; y += 20) {
+        ctx.fillStyle = 'rgba(255,255,255,0.14)';
+        ctx.fillRect(0, y, 512, 3);
       }
     } else {
-      ctx.fillStyle = '#e2e8f0';
-      ctx.fillRect(0, 0, 256, 128);
-      for (let x = 0; x < 256; x += 8) {
-        ctx.fillStyle = x % 16 === 0 ? 'rgba(255,255,255,0.65)' : 'rgba(100,116,139,0.25)';
-        ctx.fillRect(x, 0, 4, 128);
+      ctx.fillStyle = '#f1f5f9';
+      ctx.fillRect(0, 0, 512, 256);
+      for (let x = 0; x < 512; x += 12) {
+        ctx.fillStyle = x % 24 === 0 ? 'rgba(255,255,255,0.75)' : 'rgba(148,163,184,0.24)';
+        ctx.fillRect(x, 0, 5, 256);
       }
     }
 
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.colorSpace = THREE.SRGBColorSpace;
+    const tex = this._applyTextureCrispness(new THREE.CanvasTexture(canvas));
     this.textureCache.set(key, tex);
     return tex;
   }
 
   _createBlueHeaderBadge(text, width = 1.8, height = 0.26) {
-    const key = `badge_${text}`;
+    // Aspect-aware high-res canvas so wide banners never look stretched or blurry
+    const aspectBucket = Math.max(4, Math.min(48, Math.round((width / Math.max(0.15, height)) * 2)));
+    const key = `badge_${text}_${aspectBucket}`;
     let tex = this.textureCache.get(key);
     if (!tex && typeof document !== 'undefined') {
       const canvas = document.createElement('canvas');
-      canvas.width = 512;
-      canvas.height = 80;
+      const ch = 96;
+      const cw = Math.max(512, Math.min(2048, Math.round((width / Math.max(0.15, height)) * ch)));
+      canvas.width = cw;
+      canvas.height = ch;
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.fillStyle = '#1e40af';
-        ctx.fillRect(0, 0, 512, 80);
-        ctx.strokeStyle = '#ffffff';
+        const bgGrad = ctx.createLinearGradient(0, 0, 0, ch);
+        bgGrad.addColorStop(0, '#1d4ed8');
+        bgGrad.addColorStop(1, '#1e3a8a');
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, 0, cw, ch);
+        ctx.strokeStyle = 'rgba(255,255,255,0.92)';
         ctx.lineWidth = 5;
-        ctx.strokeRect(4, 4, 504, 72);
+        ctx.strokeRect(4, 4, cw - 8, ch - 8);
 
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 34px "Plus Jakarta Sans", "Inter", sans-serif';
+        ctx.font = '800 44px "Plus Jakarta Sans", "Inter", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(text, 256, 42, 480);
+        ctx.fillText(text, cw / 2, ch / 2 + 2, cw - 36);
       }
-      tex = new THREE.CanvasTexture(canvas);
-      tex.colorSpace = THREE.SRGBColorSpace;
+      tex = this._applyTextureCrispness(new THREE.CanvasTexture(canvas));
       this.textureCache.set(key, tex);
     }
 
-    const geo = new THREE.BoxGeometry(width, height, 0.04);
+    const geo = new THREE.BoxGeometry(width, height, 0.036);
     const mat = new THREE.MeshStandardMaterial({
       color: 0xffffff,
       map: tex || null,
-      roughness: 0.35,
-      metalness: 0.05,
+      roughness: 0.32,
+      metalness: 0.06,
     });
     const mesh = new THREE.Mesh(geo, mat);
-    this._addInkedOutline(mesh, 0x0f172a, 0.7);
     return mesh;
   }
 
@@ -994,43 +1096,48 @@ export class TrainerScene3D {
     return this._digitalTempTexture;
   }
 
-  // Surface-mounted 3D pin terminal tag ("tertempel pada trainer, tidak mengambang")
+  // Surface-mounted 3D pin terminal tag — high-contrast dark-navy badge & bold white label readable from afar
   _getPinSurfaceTexture(label, color = 'red', stackCount = 0) {
-    const key = `pintag_${label}_${color}_${stackCount}`;
+    const key = `pintag_v3_${label}_${color}_${stackCount}`;
     if (this.textureCache.has(key)) return this.textureCache.get(key);
     if (typeof document === 'undefined') return null;
 
     const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 84;
+    canvas.width = 384;
+    canvas.height = 144;
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      // Crisp silkscreened tag background mounted on the board
-      ctx.fillStyle = stackCount > 1 ? '#fef3c7' : '#ffffff';
-      ctx.fillRect(0, 0, 256, 84);
-
-      const borderHex =
+      const bandHex =
         color === 'red'
-          ? '#b91c1c'
+          ? '#ef4444'
           : color === 'blue'
-            ? '#1d4ed8'
+            ? '#3b82f6'
             : color === 'yellow'
-              ? '#b45309'
-              : '#1e293b';
-      ctx.strokeStyle = borderHex;
-      ctx.lineWidth = 8;
-      ctx.strokeRect(4, 4, 248, 76);
+              ? '#f59e0b'
+              : '#94a3b8';
 
-      ctx.fillStyle = '#0f172a';
-      ctx.font = 'bold 42px "JetBrains Mono", monospace';
+      const isStacked = stackCount > 1;
+      // High-contrast dark navy pill (or bright amber when stacked) so students immediately locate every pin
+      ctx.fillStyle = isStacked ? '#facc15' : '#0f172a';
+      ctx.fillRect(0, 0, 384, 144);
+
+      // Vivid color-coding top indicator bar
+      ctx.fillStyle = bandHex;
+      ctx.fillRect(0, 0, 384, 24);
+
+      ctx.strokeStyle = isStacked ? '#0f172a' : bandHex;
+      ctx.lineWidth = 10;
+      ctx.strokeRect(5, 5, 374, 134);
+
+      ctx.fillStyle = isStacked ? '#0f172a' : '#ffffff';
+      ctx.font = '800 68px "JetBrains Mono", "Inter", monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
-      const display = stackCount > 1 ? `${label} ×${stackCount}` : label;
-      ctx.fillText(display, 128, 44, 232);
+      const display = isStacked ? `${label}x${stackCount}` : label;
+      ctx.fillText(display, 192, 86, 354);
     }
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.colorSpace = THREE.SRGBColorSpace;
+    const tex = this._applyTextureCrispness(new THREE.CanvasTexture(canvas));
     this.textureCache.set(key, tex);
     return tex;
   }
@@ -1038,12 +1145,11 @@ export class TrainerScene3D {
   _createPinSurfaceTagMesh(pin, stackCount = 0) {
     const isBatteryPost = pin.terminalType === 'battery_post';
     const textLen = (pin.label || '').length;
-    // Auto-clamped compact tag width so labels never overlap adjacent socket terminals
-    const tagW = isBatteryPost ? 0.82 : Math.max(0.32, Math.min(0.44, 0.26 + textLen * 0.035));
-    const tagH = isBatteryPost ? 0.28 : 0.16;
+    const tagW = isBatteryPost ? 0.96 : Math.max(0.44, Math.min(0.68, 0.30 + textLen * 0.056));
+    const tagH = isBatteryPost ? 0.36 : 0.245;
 
     const tex = this._getPinSurfaceTexture(pin.label, pin.color, stackCount);
-    const geo = new THREE.BoxGeometry(tagW, tagH, 0.02);
+    const geo = new THREE.BoxGeometry(tagW, tagH, 0.022);
     const mat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
       map: tex || null,
@@ -1052,18 +1158,16 @@ export class TrainerScene3D {
     mesh.visible = this.labelsVisible;
 
     if (isBatteryPost) {
-      // Mounted flat on the top-front bevel of the battery cover right in front of the lead post
-      mesh.position.set(0, 0.12, 0.38);
+      mesh.position.set(0, 0.14, 0.42);
     } else {
-      // Mounted flat on the component faceplate directly below the pin hole
-      mesh.position.set(0, -0.175, 0.092);
+      mesh.position.set(0, -0.23, 0.098);
     }
     mesh.userData = { pinId: pin.id, pinData: pin };
     return mesh;
   }
 
   _createBoardSchematicPlate(comp, w, h) {
-    const key = `schem_v2_${comp.type}_${comp.id}`;
+    const key = `schem_v3_${comp.type}_${comp.id}`;
     let tex = this.textureCache.get(key);
     if (!tex && typeof document !== 'undefined') {
       const canvas = document.createElement('canvas');
@@ -1071,150 +1175,187 @@ export class TrainerScene3D {
       canvas.height = 384;
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        // Warm white/ivory trainer cell card with red-maroon partition border (matching Gambar 2!)
-        ctx.fillStyle = '#fcfbf7';
+        // Eye-comfortable matte ivory trainer cell card with crisp maroon partition border
+        ctx.fillStyle = '#f5f2ea';
         ctx.fillRect(0, 0, 512, 384);
 
-        // Maroon-red trainer cell partition border (like Gambar 2)
+        // Maroon-red trainer cell partition border
         ctx.strokeStyle = '#991b1b';
         ctx.lineWidth = 8;
         ctx.strokeRect(4, 4, 504, 376);
 
-        // Subtle bottom terminal strip guide line where the small pin sockets sit
-        ctx.strokeStyle = 'rgba(153, 27, 27, 0.25)';
+        // Dedicated Zone-3 schematic & terminal divider line (strictly below 3D hardware!)
+        ctx.fillStyle = 'rgba(226, 232, 240, 0.38)';
+        ctx.fillRect(10, 232, 492, 68);
+        ctx.strokeStyle = 'rgba(153, 27, 27, 0.30)';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.moveTo(16, 306);
-        ctx.lineTo(496, 306);
+        ctx.moveTo(12, 232);
+        ctx.lineTo(500, 232);
+        ctx.moveTo(12, 300);
+        ctx.lineTo(500, 300);
         ctx.stroke();
 
-        // Draw schematic symbols in the middle-lower section above the bottom pin row
-        ctx.strokeStyle = '#1e293b';
-        ctx.fillStyle = '#1e293b';
-        ctx.lineWidth = 3.2;
-        ctx.font = 'bold 19px "JetBrains Mono", monospace';
+        // Draw crisp wiring schematic symbols inside the unobstructed band y = [238..294]
+        ctx.strokeStyle = '#0f172a';
+        ctx.fillStyle = '#0f172a';
+        ctx.lineWidth = 3.4;
+        ctx.font = 'bold 18px "JetBrains Mono", monospace';
         ctx.textAlign = 'center';
 
-        const drawBulbSymbol = (cx, cy, r = 20, label = '') => {
+        const drawBulbSymbol = (cx, cy, r = 17, label = '') => {
           ctx.beginPath();
           ctx.arc(cx, cy, r, 0, Math.PI * 2);
           ctx.stroke();
-          const d = r * 0.7;
+          const d = r * 0.68;
           ctx.beginPath();
           ctx.moveTo(cx - d, cy - d);
           ctx.lineTo(cx + d, cy + d);
           ctx.moveTo(cx + d, cy - d);
           ctx.lineTo(cx - d, cy + d);
           ctx.stroke();
-          if (label) ctx.fillText(label, cx, cy - r - 7);
+          if (label) ctx.fillText(label, cx, cy - r - 4);
         };
 
-        if (comp.type === 'headlamp') {
-          drawBulbSymbol(175, 265, 19, 'LO');
-          drawBulbSymbol(256, 265, 19, 'HI');
+        if (comp.type === 'headlamp' || comp.type === 'lamp_h4') {
+          drawBulbSymbol(168, 272, 16, 'LO');
+          drawBulbSymbol(256, 272, 16, 'HI');
           ctx.beginPath();
-          ctx.moveTo(345, 248);
-          ctx.lineTo(345, 280);
-          ctx.moveTo(327, 280);
-          ctx.lineTo(363, 280);
-          ctx.moveTo(334, 288);
-          ctx.lineTo(356, 288);
+          ctx.moveTo(348, 250);
+          ctx.lineTo(348, 278);
+          ctx.moveTo(330, 278);
+          ctx.lineTo(366, 278);
+          ctx.moveTo(337, 286);
+          ctx.lineTo(359, 286);
           ctx.stroke();
-        } else if (comp.type === 'relay_4p') {
-          ctx.strokeRect(145, 242, 84, 44);
+        } else if (comp.type === 'relay_4p' || comp.type === 'relay_5p') {
+          ctx.strokeRect(130, 246, 86, 40);
           ctx.beginPath();
-          ctx.moveTo(158, 286);
-          ctx.lineTo(215, 242);
+          ctx.moveTo(144, 286);
+          ctx.lineTo(202, 246);
           ctx.stroke();
           ctx.beginPath();
-          ctx.moveTo(295, 286);
-          ctx.lineTo(295, 265);
-          ctx.lineTo(342, 246);
-          ctx.moveTo(352, 265);
-          ctx.lineTo(352, 286);
+          ctx.moveTo(285, 286);
+          ctx.lineTo(285, 266);
+          ctx.lineTo(334, 248);
+          ctx.moveTo(344, 266);
+          ctx.lineTo(344, 286);
+          if (comp.type === 'relay_5p') {
+            ctx.moveTo(344, 248);
+            ctx.lineTo(388, 248);
+            ctx.lineTo(388, 286);
+          }
           ctx.stroke();
         } else if (comp.type === 'flasher') {
-          ctx.strokeRect(150, 244, 212, 46);
-          ctx.fillText('B (49)   L (49a)   E (31)', 256, 273);
+          ctx.strokeRect(140, 246, 232, 42);
+          ctx.fillText('B (49)  L (49a)  E (31)', 256, 273);
         } else if (comp.type === 'fuse_single' || comp.type === 'fuse_dual' || comp.type === 'fuse_quad') {
           ctx.beginPath();
-          ctx.moveTo(130, 268);
-          ctx.bezierCurveTo(200, 242, 312, 294, 382, 268);
+          ctx.moveTo(120, 268);
+          ctx.bezierCurveTo(195, 244, 317, 292, 392, 268);
           ctx.stroke();
           ctx.beginPath();
-          ctx.arc(130, 268, 5, 0, Math.PI * 2);
-          ctx.arc(382, 268, 5, 0, Math.PI * 2);
+          ctx.arc(120, 268, 5, 0, Math.PI * 2);
+          ctx.arc(392, 268, 5, 0, Math.PI * 2);
           ctx.fill();
         } else if (comp.type === 'switch_push' || comp.type === 'switch_toggle') {
           ctx.beginPath();
-          ctx.moveTo(155, 272);
-          ctx.lineTo(215, 272);
-          ctx.lineTo(290, 245);
-          ctx.moveTo(295, 272);
-          ctx.lineTo(355, 272);
+          ctx.moveTo(150, 272);
+          ctx.lineTo(212, 272);
+          ctx.lineTo(290, 248);
+          ctx.moveTo(298, 272);
+          ctx.lineTo(362, 272);
           ctx.stroke();
           ctx.beginPath();
-          ctx.arc(215, 272, 5, 0, Math.PI * 2);
-          ctx.arc(295, 272, 5, 0, Math.PI * 2);
+          ctx.arc(212, 272, 5, 0, Math.PI * 2);
+          ctx.arc(298, 272, 5, 0, Math.PI * 2);
           ctx.fill();
         } else if (comp.type === 'ignition') {
           ctx.beginPath();
-          ctx.moveTo(160, 270);
-          ctx.lineTo(235, 270);
-          ctx.lineTo(315, 246);
+          ctx.moveTo(155, 272);
+          ctx.lineTo(232, 272);
+          ctx.lineTo(314, 248);
           ctx.stroke();
+          ctx.fillText('30 -> ACC / IG / ST', 256, 292);
         } else if (comp.type === 'lamp_red_dual') {
-          // 4 Chambers (Gambar 4): SIGN, TAIL, STOP, REV + GND
-          drawBulbSymbol(80, 268, 16, 'SIGN');
-          drawBulbSymbol(165, 268, 16, 'TAIL');
-          drawBulbSymbol(250, 268, 16, 'STOP');
-          drawBulbSymbol(335, 268, 16, 'REV');
+          drawBulbSymbol(82, 272, 14, 'SIGN');
+          drawBulbSymbol(168, 272, 14, 'TAIL');
+          drawBulbSymbol(254, 272, 14, 'STOP');
+          drawBulbSymbol(340, 272, 14, 'REV');
           ctx.beginPath();
-          ctx.moveTo(420, 250);
-          ctx.lineTo(420, 282);
-          ctx.moveTo(402, 282);
-          ctx.lineTo(438, 282);
+          ctx.moveTo(426, 250);
+          ctx.lineTo(426, 280);
+          ctx.moveTo(410, 280);
+          ctx.lineTo(442, 280);
           ctx.stroke();
         } else if (comp.type === 'licence_lamp') {
-          // Licence Lamp (Gambar 1): LIC+ & GND
-          drawBulbSymbol(190, 266, 20, 'LIC');
+          drawBulbSymbol(190, 272, 16, 'LIC');
           ctx.beginPath();
           ctx.moveTo(320, 250);
-          ctx.lineTo(320, 282);
-          ctx.moveTo(302, 282);
-          ctx.lineTo(338, 282);
+          ctx.lineTo(320, 280);
+          ctx.moveTo(302, 280);
+          ctx.lineTo(338, 280);
           ctx.stroke();
-        } else if (comp.type === 'lamp_amber' || comp.type === 'lamp_test') {
-          drawBulbSymbol(210, 266, 20, '');
+        } else if (comp.type === 'lamp_amber' || comp.type === 'lamp_test' || comp.type === 'lamp_small') {
+          drawBulbSymbol(205, 272, 16, '');
           ctx.beginPath();
-          ctx.moveTo(310, 250);
-          ctx.lineTo(310, 282);
-          ctx.moveTo(292, 282);
-          ctx.lineTo(328, 282);
+          ctx.moveTo(312, 250);
+          ctx.lineTo(312, 280);
+          ctx.moveTo(294, 280);
+          ctx.lineTo(330, 280);
           ctx.stroke();
-        } else if (comp.type === 'horn') {
+        } else if (comp.type === 'lamp_led') {
+          // Diode LED symbol
           ctx.beginPath();
-          ctx.strokeRect(195, 250, 34, 30);
-          ctx.moveTo(229, 254);
-          ctx.lineTo(280, 238);
-          ctx.lineTo(280, 292);
+          ctx.moveTo(170, 268);
+          ctx.lineTo(228, 268);
+          ctx.moveTo(228, 248);
+          ctx.lineTo(228, 288);
+          ctx.lineTo(272, 268);
+          ctx.closePath();
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(272, 248);
+          ctx.lineTo(272, 288);
+          ctx.moveTo(272, 268);
+          ctx.lineTo(340, 268);
+          ctx.stroke();
+        } else if (comp.type === 'motor_small' || comp.type === 'motor_ac_drive') {
+          ctx.beginPath();
+          ctx.arc(256, 266, 22, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.fillText('M', 256, 272);
+        } else if (comp.type === 'resistor_bank' || comp.type === 'resistor_blower') {
+          ctx.beginPath();
+          ctx.moveTo(128, 268);
+          for (let i = 0; i < 6; i++) {
+            ctx.lineTo(152 + i * 38, i % 2 === 0 ? 250 : 284);
+          }
+          ctx.lineTo(384, 268);
+          ctx.stroke();
+          if (comp.type === 'resistor_blower') ctx.fillText('OUT · L · M · H', 256, 246);
+        } else if (comp.type === 'horn' || comp.type === 'buzzer') {
+          ctx.beginPath();
+          ctx.strokeRect(195, 252, 34, 28);
+          ctx.moveTo(229, 256);
+          ctx.lineTo(280, 242);
+          ctx.lineTo(280, 290);
           ctx.lineTo(229, 276);
           ctx.closePath();
           ctx.stroke();
         } else if (comp.type === 'indicator_cluster') {
-          // 3 Horizontal pilot lamps over 4 pins (TURN, TAIL, HI, GND)
-          drawBulbSymbol(100, 268, 16, 'TURN');
-          drawBulbSymbol(195, 268, 16, 'TAIL');
-          drawBulbSymbol(290, 268, 16, 'HI');
+          drawBulbSymbol(100, 272, 14, 'TURN');
+          drawBulbSymbol(195, 272, 14, 'TAIL');
+          drawBulbSymbol(290, 272, 14, 'HI');
           ctx.beginPath();
           ctx.moveTo(385, 250);
-          ctx.lineTo(385, 282);
-          ctx.moveTo(368, 282);
-          ctx.lineTo(402, 282);
+          ctx.lineTo(385, 280);
+          ctx.moveTo(368, 280);
+          ctx.lineTo(402, 280);
           ctx.stroke();
         } else if (comp.type === 'power_rail') {
           ctx.beginPath();
-          ctx.moveTo(256, 238);
+          ctx.moveTo(256, 240);
           ctx.lineTo(256, 258);
           ctx.moveTo(226, 258);
           ctx.lineTo(286, 258);
@@ -1224,59 +1365,41 @@ export class TrainerScene3D {
           ctx.lineTo(256, 290);
           ctx.stroke();
         } else if (comp.type === 'switch_blower_rotary') {
-          ctx.beginPath();
-          ctx.arc(256, 260, 24, 0, Math.PI * 2);
-          ctx.stroke();
-          ctx.fillText('0  1  2  3', 256, 230);
+          ctx.fillText('B  ->  1 (L) · 2 (M) · 3 (H)', 256, 272);
         } else if (comp.type === 'switch_ac_push') {
-          ctx.strokeRect(216, 240, 80, 48);
-          ctx.fillText('A/C', 256, 270);
+          ctx.strokeRect(190, 246, 132, 40);
+          ctx.fillText('A/C SW', 256, 272);
         } else if (comp.type === 'thermostat_ac') {
-          ctx.strokeRect(210, 242, 92, 44);
-          ctx.fillText('TEMP', 256, 270);
+          ctx.strokeRect(186, 246, 140, 40);
+          ctx.fillText('THERMO', 256, 272);
         } else if (comp.type === 'pressure_switch_dual') {
-          ctx.strokeRect(190, 244, 132, 42);
-          ctx.fillText('LP / HP', 256, 272);
-        } else if (comp.type === 'resistor_blower') {
-          ctx.beginPath();
-          ctx.moveTo(140, 266);
-          for (let i = 0; i < 6; i++) {
-            ctx.lineTo(160 + i * 36, i % 2 === 0 ? 250 : 282);
-          }
-          ctx.lineTo(376, 266);
-          ctx.stroke();
-          ctx.fillText('L   M   H', 256, 236);
+          ctx.strokeRect(172, 246, 168, 40);
+          ctx.fillText('LP / HP SW', 256, 272);
         } else if (comp.type === 'evaporator_unit') {
-          ctx.strokeRect(160, 240, 192, 48);
-          ctx.fillText('BLOWER & EVAP', 256, 270);
+          ctx.strokeRect(142, 246, 228, 40);
+          ctx.fillText('EVAPORATOR BLOWER', 256, 272);
         } else if (comp.type === 'magnetic_clutch') {
           ctx.beginPath();
-          ctx.arc(256, 265, 22, 0, Math.PI * 2);
+          ctx.arc(256, 266, 20, 0, Math.PI * 2);
           ctx.stroke();
-          ctx.fillText('CLUTCH', 256, 232);
+          ctx.fillText('CLUTCH COIL', 256, 246);
         } else if (comp.type === 'condenser_fan') {
           ctx.beginPath();
-          ctx.arc(256, 265, 22, 0, Math.PI * 2);
+          ctx.arc(256, 266, 20, 0, Math.PI * 2);
           ctx.stroke();
-          ctx.fillText('FAN', 256, 232);
+          ctx.fillText('EXTRA FAN', 256, 246);
         } else if (comp.type === 'manifold_gauge_unit') {
           ctx.beginPath();
-          ctx.arc(210, 265, 18, 0, Math.PI * 2);
-          ctx.arc(302, 265, 18, 0, Math.PI * 2);
+          ctx.arc(198, 266, 16, 0, Math.PI * 2);
+          ctx.arc(314, 266, 16, 0, Math.PI * 2);
           ctx.stroke();
-          ctx.fillText('LOW   HIGH', 256, 232);
+          ctx.fillText('CLUTCH TERMINAL', 256, 292);
         } else if (comp.type === 'digital_temp_unit') {
-          ctx.strokeRect(170, 244, 172, 40);
-          ctx.fillText('T1   T2   T3', 256, 270);
-        } else if (comp.type === 'motor_ac_drive') {
-          ctx.beginPath();
-          ctx.arc(256, 265, 22, 0, Math.PI * 2);
-          ctx.stroke();
-          ctx.fillText('MOTOR M', 256, 272);
+          ctx.strokeRect(148, 246, 216, 40);
+          ctx.fillText('T1 · T2 · T3 / FAN', 256, 272);
         }
       }
-      tex = new THREE.CanvasTexture(canvas);
-      tex.colorSpace = THREE.SRGBColorSpace;
+      tex = this._applyTextureCrispness(new THREE.CanvasTexture(canvas));
       this.textureCache.set(key, tex);
     }
 
@@ -1284,18 +1407,17 @@ export class TrainerScene3D {
     const plateMat = new THREE.MeshStandardMaterial({
       color: 0xffffff,
       map: tex || null,
-      roughness: 0.72,
+      roughness: 0.62,
       metalness: 0.04,
     });
     const plate = new THREE.Mesh(plateGeo, plateMat);
     plate.position.set(0, 0, 0.04);
     plate.receiveShadow = true;
-    this._addInkedOutline(plate, 0x7f1d1d, 0.75);
     return plate;
   }
 
   // ============================================================================
-  // STAND FRAME, PANEL GRID & CASTER WHEELS (MATCHING PHOTOS 1-4 & GAMBAR 2)
+  // STAND FRAME, PANEL GRID, ANGLED CONSOLE DECK & CASTER WHEELS (100% PBR)
   // ============================================================================
 
   _buildStandFrame(boardWidth = 21, boardHeight = 8.6) {
@@ -1304,97 +1426,165 @@ export class TrainerScene3D {
     }
 
     const isAc = Boolean(this.module?.category?.includes('AC') || this.module?.id?.startsWith('ac'));
+    const hasConsole = Boolean(this.module?.hasAngledConsole && this.module?.consoleConfig);
+    const cfg = this.module?.consoleConfig || null;
 
-    // Yellow outer aluminum/steel frame (matching Gambar 2!) + Maroon-Red stand legs
-    // or Anodized Silver Aluminum Extrusion for AC Trainer (matching Gambar 1!)
+    // 100% PBR powder-coated industrial steel & brushed anodized aluminum frames
     const yellowFrameMat = new THREE.MeshStandardMaterial({
-      color: 0xeab308,
-      roughness: 0.42,
-      metalness: 0.25,
+      color: 0xd9a11b,
+      roughness: 0.32,
+      metalness: 0.35,
+    });
+
+    const darkSteelMat = new THREE.MeshStandardMaterial({
+      color: 0x262b33,
+      roughness: 0.38,
+      metalness: 0.68,
     });
 
     const standRedSteelMat = new THREE.MeshStandardMaterial({
-      color: 0x7f1d1d,
-      roughness: 0.48,
-      metalness: 0.38,
+      color: 0x7c1d23,
+      roughness: 0.36,
+      metalness: 0.45,
     });
 
     const frameMat = isAc
-      ? new THREE.MeshStandardMaterial({ color: 0xd1d5db, roughness: 0.28, metalness: 0.78 })
+      ? new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.24, metalness: 0.85 })
       : yellowFrameMat;
 
     const legMat = isAc
-      ? new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.32, metalness: 0.75 })
+      ? new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.28, metalness: 0.82 })
       : standRedSteelMat;
 
     const boardMat = new THREE.MeshStandardMaterial({
-      color: isAc ? 0xf3f4f6 : this.boardThemeHex,
+      color: isAc ? 0xe4e8ee : this.boardThemeHex,
       roughness: 0.78,
-      metalness: 0.04,
+      metalness: 0.03,
     });
     this.boardMeshMaterial = boardMat;
 
-    const boardCenterY = isAc ? 0.35 : (this.module?.id === 'fig06' ? 0.05 : 0.2);
+    const upperH = hasConsole ? cfg.upperBoardHeight : boardHeight;
+    const boardCenterY = hasConsole
+      ? cfg.upperBoardCenterY
+      : isAc
+        ? 0.35
+        : this.module?.id === 'fig06'
+          ? 0.05
+          : 0.2;
 
-    // Upper trainer board panel
-    const boardGeo = new THREE.BoxGeometry(boardWidth, boardHeight, 0.45);
+    // Upper vertical trainer board panel
+    const boardGeo = new THREE.BoxGeometry(boardWidth, upperH, 0.45);
     const boardMesh = new THREE.Mesh(boardGeo, boardMat);
     boardMesh.position.set(0, boardCenterY, 0.0);
     boardMesh.receiveShadow = true;
     boardMesh.castShadow = true;
-    this._addInkedOutline(boardMesh, 0x181816, 0.9);
     this.standGroup.add(boardMesh);
 
-    // Outer border frame around the trainer board
-    const trimGeo = new THREE.BoxGeometry(boardWidth + 0.46, boardHeight + 0.46, 0.5);
+    // Outer anodized/painted border frame around upper board
+    const trimGeo = new THREE.BoxGeometry(boardWidth + 0.44, upperH + 0.44, 0.48);
     const trimBack = new THREE.Mesh(trimGeo, frameMat);
-    trimBack.position.set(0, boardCenterY, -0.04);
-    this._addInkedOutline(trimBack, 0x111111, 0.95);
+    trimBack.position.set(0, boardCenterY, -0.05);
+    trimBack.castShadow = true;
+    trimBack.receiveShadow = true;
     this.standGroup.add(trimBack);
 
-    // Top main trainer header banner
+    // Physical 45° Angled Front Console Deck for Full Trainers (Fig. 06 & AC 03)
+    if (hasConsole) {
+      const consoleGroup = new THREE.Group();
+      consoleGroup.position.set(0, cfg.hingeY, cfg.hingeZ);
+      consoleGroup.rotation.x = cfg.tiltX;
+
+      const deckThick = 0.28;
+      const deckGeo = new THREE.BoxGeometry(boardWidth + 0.04, cfg.depth, deckThick);
+      const deckMesh = new THREE.Mesh(deckGeo, boardMat);
+      deckMesh.position.set(0, -cfg.depth / 2, -deckThick / 2);
+      deckMesh.receiveShadow = true;
+      deckMesh.castShadow = true;
+      consoleGroup.add(deckMesh);
+
+      // Front protective steel trim rail along the bottom edge of the angled console
+      const frontTrimGeo = new THREE.BoxGeometry(boardWidth + 0.44, 0.18, deckThick + 0.08);
+      const frontTrim = new THREE.Mesh(frontTrimGeo, frameMat);
+      frontTrim.position.set(0, -cfg.depth - 0.05, -deckThick / 2 + 0.02);
+      frontTrim.castShadow = true;
+      frontTrim.receiveShadow = true;
+      consoleGroup.add(frontTrim);
+
+      // Hinge steel channel seam between vertical board and sloped console
+      const hingeBarGeo = new THREE.BoxGeometry(boardWidth + 0.44, 0.14, 0.16);
+      const hingeBar = new THREE.Mesh(hingeBarGeo, darkSteelMat);
+      hingeBar.position.set(0, 0.02, -0.04);
+      consoleGroup.add(hingeBar);
+
+      // Left & Right side cheek rails on the sloped console
+      for (const side of [-1, 1]) {
+        const cheekGeo = new THREE.BoxGeometry(0.22, cfg.depth + 0.12, deckThick + 0.08);
+        const cheek = new THREE.Mesh(cheekGeo, frameMat);
+        cheek.position.set(side * (boardWidth / 2 + 0.11), -cfg.depth / 2, -deckThick / 2 + 0.02);
+        cheek.castShadow = true;
+        consoleGroup.add(cheek);
+      }
+
+      this.standGroup.add(consoleGroup);
+
+      // Triangular metallic under-console support gussets connecting console to the main pillars
+      const gussetShape = new THREE.Shape();
+      const projY = cfg.depth * Math.cos(Math.abs(cfg.tiltX));
+      const projZ = cfg.depth * Math.sin(Math.abs(cfg.tiltX));
+      gussetShape.moveTo(0, 0);
+      gussetShape.lineTo(projZ, -projY);
+      gussetShape.lineTo(0, -projY - 0.35);
+      gussetShape.closePath();
+      const gussetGeo = new THREE.ExtrudeGeometry(gussetShape, { depth: 0.2, bevelEnabled: false });
+      gussetGeo.rotateY(-Math.PI / 2);
+      for (const side of [-1, 1]) {
+        const gusset = new THREE.Mesh(gussetGeo, darkSteelMat);
+        gusset.position.set(side * (boardWidth / 2 - 0.25) + 0.1, cfg.hingeY - 0.12, cfg.hingeZ - 0.1);
+        gusset.castShadow = true;
+        this.standGroup.add(gusset);
+      }
+    }
+
+    // Top main trainer header banner (aspect-aware, crisp, never stretched!)
     const bannerTitle = isAc
       ? 'AUTOMOTIVE AIR CONDITIONING SYSTEM TRAINER (R134a)'
       : 'AUTOMOTIVE BODY ELECTRICAL TRAINER';
     const mainBanner = this._createBlueHeaderBadge(
       bannerTitle,
-      Math.min(13.5, boardWidth * (isAc ? 0.65 : 0.42)),
-      0.32
+      Math.min(13.5, boardWidth * (isAc ? 0.65 : 0.44)),
+      0.34
     );
-    mainBanner.position.set(0, boardCenterY + boardHeight / 2 + 0.14, 0.26);
+    mainBanner.position.set(0, boardCenterY + upperH / 2 + 0.16, 0.26);
     this.standGroup.add(mainBanner);
 
-    // Schematic poster elevated on the upper header frame above the board (Opsi A)
+    // Schematic poster elevated on the upper header frame above the board (AC Trainer)
     if (isAc) {
       const diagW = 4.2;
       const diagH = 1.3;
-      const diagY = boardCenterY + boardHeight / 2 + 0.85;
+      const diagY = boardCenterY + upperH / 2 + 0.85;
       const diagX = -6.8;
 
       const diagramGroup = new THREE.Group();
 
-      // Backing board plate with frame
-      const backGeo = new THREE.BoxGeometry(diagW + 0.12, diagH + 0.12, 0.08);
+      const backGeo = new THREE.BoxGeometry(diagW + 0.14, diagH + 0.14, 0.08);
       const backMesh = new THREE.Mesh(backGeo, frameMat);
       backMesh.position.set(diagX, diagY, 0.22);
-      this._addInkedOutline(backMesh, 0x334155, 0.85);
       diagramGroup.add(backMesh);
 
-      // Steel vertical mounting struts connecting to top frame trim
       for (const sx of [diagX - 1.5, diagX + 1.5]) {
         const strutGeo = new THREE.BoxGeometry(0.16, 0.45, 0.1);
         const strut = new THREE.Mesh(strutGeo, frameMat);
-        strut.position.set(sx, boardCenterY + boardHeight / 2 + 0.22, 0.2);
-        this._addInkedOutline(strut, 0x334155, 0.8);
+        strut.position.set(sx, boardCenterY + upperH / 2 + 0.22, 0.2);
         diagramGroup.add(strut);
       }
 
-      // High-resolution diagram canvas texture
       const diagramGeo = new THREE.PlaneGeometry(diagW, diagH);
-      const diagramMat = new THREE.MeshBasicMaterial({ map: this._getAcDiagramTexture() });
+      const diagramMat = new THREE.MeshStandardMaterial({
+        map: this._applyTextureCrispness(this._getAcDiagramTexture()),
+        roughness: 0.4,
+      });
       const diagram = new THREE.Mesh(diagramGeo, diagramMat);
       diagram.position.set(diagX, diagY, 0.28);
-      this._addInkedOutline(diagram, 0x1e3a8a, 0.85);
       diagramGroup.add(diagram);
 
       this.standGroup.add(diagramGroup);
@@ -1472,16 +1662,16 @@ export class TrainerScene3D {
     this.standGroup.add(lip);
 
     if (isAc) {
-      // Build realistic physical refrigeration equipment on lower shelf
+      // Build realistic physical 3D refrigeration equipment on lower shelf (full width, zero wire-rack overlap!)
       this._buildAcRefrigerationEquipment(SHELF_TOP_Y);
+    } else {
+      // 3D wire storage rack standing on the right side of the lower shelf (Body Electrical modules)
+      this._build3DWireRackOnShelf(Math.min(6.2, boardWidth * 0.28), SHELF_TOP_Y);
     }
-
-    // 3D wire storage rack standing on the right side of the shelf
-    this._build3DWireRackOnShelf(Math.min(6.2, boardWidth * 0.28), SHELF_TOP_Y);
 
     // 3D Digital Multimeter unit sitting on the shelf (or middle tabletop desk for AC Trainer)
     if (isAc) {
-      this._build3DMultimeterOnShelf(7.8, -3.61, 2.2);
+      this._build3DMultimeterOnShelf(9.2, -3.61, 2.2);
     } else {
       this._build3DMultimeterOnShelf(Math.min(1.0, boardWidth * 0.05), SHELF_TOP_Y, 1.05);
     }
@@ -1490,181 +1680,276 @@ export class TrainerScene3D {
   _buildAcRefrigerationEquipment(shelfTopY) {
     const equipGroup = new THREE.Group();
 
-    const motorBlueMat = new THREE.MeshStandardMaterial({ color: 0x1e40af, roughness: 0.45, metalness: 0.3 });
-    const compAlumMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.35, metalness: 0.65 });
-    const pulleySteelMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.3, metalness: 0.75 });
-    const rubberBeltMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.85 });
-    const blackMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.6 });
+    const motorBlueMat = new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.36, metalness: 0.42 });
+    const aluminumMat = new THREE.MeshStandardMaterial({ color: 0xc2cbd1, roughness: 0.28, metalness: 0.84 });
+    const castShadeMat = new THREE.MeshStandardMaterial({ color: 0x8d9aa1, roughness: 0.36, metalness: 0.78 });
+    const brightAlMat = new THREE.MeshStandardMaterial({ color: 0xdce4e8, roughness: 0.20, metalness: 0.90 });
+    const steelMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.28, metalness: 0.82 });
+    const blackMat = new THREE.MeshStandardMaterial({ color: 0x181e24, roughness: 0.42, metalness: 0.22 });
+    const rubberMat = new THREE.MeshStandardMaterial({ color: 0x121518, roughness: 0.84, metalness: 0.04 });
+    const brassMat = new THREE.MeshStandardMaterial({ color: 0xc69a43, roughness: 0.26, metalness: 0.80 });
 
-    // 1. Electric Drive Motor (Blue cast casing with fins)
+    const addPart = (parent, geo, mat, pos = [0, 0, 0], rot = [0, 0, 0]) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(...pos);
+      m.rotation.set(...rot);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      parent.add(m);
+      return m;
+    };
+
+    // ------------------------------------------------------------------------
+    // 1. ELECTRIC ENGINE DRIVE MOTOR (Left of lower shelf, shaft facing +Z)
+    // ------------------------------------------------------------------------
     const motorGroup = new THREE.Group();
-    motorGroup.position.set(-5.5, shelfTopY + 1.25, 1.2);
+    motorGroup.position.set(-7.6, shelfTopY + 1.18, 1.45);
 
-    const motorBody = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.85, 0.85, 2.2, 24).rotateZ(Math.PI / 2),
-      motorBlueMat
-    );
-    this._addInkedOutline(motorBody);
-    motorGroup.add(motorBody);
-
-    for (let i = -4; i <= 4; i++) {
-      const rib = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.89, 0.89, 0.08, 24).rotateZ(Math.PI / 2),
-        motorBlueMat
-      );
-      rib.position.x = i * 0.2;
-      motorGroup.add(rib);
+    // Base mounting rails
+    for (const mx of [-0.72, 0.72]) {
+      addPart(motorGroup, new THREE.BoxGeometry(0.28, 0.16, 1.85), steelMat, [mx, -1.10, -0.1]);
+      addPart(motorGroup, new THREE.BoxGeometry(0.18, 0.38, 1.45), motorBlueMat, [mx * 0.85, -0.84, -0.1]);
     }
+    // Cast finned cylindrical stator body along Z
+    addPart(motorGroup, new THREE.CylinderGeometry(0.84, 0.84, 1.85, 32), motorBlueMat, [0, 0, -0.15], [Math.PI / 2, 0, 0]);
+    for (let i = 0; i < 16; i++) {
+      const a = (i * Math.PI * 2) / 16;
+      addPart(
+        motorGroup,
+        new THREE.BoxGeometry(0.08, 0.08, 1.55),
+        motorBlueMat,
+        [Math.cos(a) * 0.86, Math.sin(a) * 0.86, -0.15],
+        [0, 0, a]
+      );
+    }
+    // Rear cooling fan cowl & front end-bell
+    addPart(motorGroup, new THREE.CylinderGeometry(0.76, 0.82, 0.42, 24), steelMat, [0, 0, -1.22], [Math.PI / 2, 0, 0]);
+    addPart(motorGroup, new THREE.CylinderGeometry(0.72, 0.82, 0.26, 24), motorBlueMat, [0, 0, 0.88], [Math.PI / 2, 0, 0]);
+    // Top electrical terminal junction box
+    addPart(motorGroup, new THREE.BoxGeometry(0.78, 0.44, 0.86), motorBlueMat, [0, 1.02, -0.15]);
+    addPart(motorGroup, new THREE.BoxGeometry(0.82, 0.08, 0.90), blackMat, [0, 1.26, -0.15]);
 
-    const termBox = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.5, 0.8), motorBlueMat);
-    termBox.position.set(0, 0.95, 0);
-    this._addInkedOutline(termBox);
-    motorGroup.add(termBox);
-
-    const motorPulley = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.65, 0.65, 0.32, 24).rotateZ(Math.PI / 2),
-      pulleySteelMat
-    );
-    motorPulley.position.set(1.3, 0, 0);
-    this._addInkedOutline(motorPulley);
-    motorGroup.add(motorPulley);
-    this.acMotorPulley = motorPulley;
-
+    // Front Drive Pulley (rotates around Z)
+    const motorPulleyGroup = new THREE.Group();
+    motorPulleyGroup.position.set(0, 0, 1.16);
+    addPart(motorPulleyGroup, new THREE.CylinderGeometry(0.62, 0.62, 0.30, 28), blackMat, [0, 0, 0], [Math.PI / 2, 0, 0]);
+    for (let g = -1; g <= 1; g++) {
+      addPart(motorPulleyGroup, new THREE.TorusGeometry(0.60, 0.022, 8, 32), steelMat, [0, 0, g * 0.07]);
+    }
+    addPart(motorPulleyGroup, new THREE.CylinderGeometry(0.18, 0.18, 0.36, 16), brightAlMat, [0, 0, 0.02], [Math.PI / 2, 0, 0]);
+    // Visual spoke marks so pulley spin is unmistakable
+    for (let s = 0; s < 3; s++) {
+      const a = (s * Math.PI * 2) / 3;
+      addPart(motorPulleyGroup, new THREE.BoxGeometry(0.42, 0.06, 0.03), steelMat, [Math.cos(a) * 0.32, Math.sin(a) * 0.32, 0.16], [0, 0, a]);
+    }
+    motorGroup.add(motorPulleyGroup);
+    this.acMotorPulley = motorPulleyGroup;
     equipGroup.add(motorGroup);
 
-    // 2. A/C Compressor with Magnetic Clutch (Sanden/Denso style)
+    // ------------------------------------------------------------------------
+    // 2. REALISTIC 3D A/C COMPRESSOR WITH MAGNETIC CLUTCH (Ported from kompresor_ac_threejs_rebuild_v3)
+    // ------------------------------------------------------------------------
     const compGroup = new THREE.Group();
-    compGroup.position.set(-0.8, shelfTopY + 1.15, 1.2);
+    compGroup.position.set(-2.3, shelfTopY + 1.18, 1.45);
+    compGroup.scale.setScalar(1.08);
 
-    const compBody = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.72, 0.72, 1.8, 24).rotateZ(Math.PI / 2),
-      compAlumMat
-    );
-    this._addInkedOutline(compBody);
-    compGroup.add(compBody);
+    // Main cast aluminum housing + rear head + seams + 12 cooling ribs
+    addPart(compGroup, new THREE.CylinderGeometry(0.66, 0.66, 1.55, 32), aluminumMat, [0, 0, -0.12], [Math.PI / 2, 0, 0]);
+    addPart(compGroup, new THREE.CylinderGeometry(0.685, 0.685, 0.18, 32), castShadeMat, [0, 0, -0.93], [Math.PI / 2, 0, 0]);
+    addPart(compGroup, new THREE.CylinderGeometry(0.59, 0.59, 0.16, 32), aluminumMat, [0, 0, -1.08], [Math.PI / 2, 0, 0]);
+    addPart(compGroup, new THREE.CylinderGeometry(0.57, 0.57, 0.13, 32), castShadeMat, [0, 0, 0.66], [Math.PI / 2, 0, 0]);
+    addPart(compGroup, new THREE.TorusGeometry(0.665, 0.024, 10, 32), brightAlMat, [0, 0, -0.78]);
+    addPart(compGroup, new THREE.TorusGeometry(0.66, 0.022, 10, 32), brightAlMat, [0, 0, 0.52]);
 
-    const rearHead = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.68, 0.74, 0.4, 20).rotateZ(Math.PI / 2),
-      compAlumMat
-    );
-    rearHead.position.set(-1.0, 0, 0);
-    this._addInkedOutline(rearHead);
-    compGroup.add(rearHead);
-
-    for (const [pz, hex] of [[-0.25, 0x1d4ed8], [0.25, 0xef4444]]) {
-      const port = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.12, 0.12, 0.35, 14),
-        new THREE.MeshStandardMaterial({ color: hex, roughness: 0.35, metalness: 0.6 })
+    for (let i = 0; i < 12; i++) {
+      const a = (i * Math.PI * 2) / 12;
+      addPart(
+        compGroup,
+        new THREE.BoxGeometry(0.075, 0.075, 1.03),
+        castShadeMat,
+        [Math.cos(a) * 0.645, Math.sin(a) * 0.645, -0.10],
+        [0, 0, a]
       );
-      port.position.set(-1.0, 0.65, pz);
-      this._addInkedOutline(port);
-      compGroup.add(port);
     }
 
-    const compPulley = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.65, 0.65, 0.32, 24).rotateZ(Math.PI / 2),
-      pulleySteelMat
-    );
-    compPulley.position.set(1.05, 0, 0);
-    this._addInkedOutline(compPulley);
-    compGroup.add(compPulley);
-    this.acCompressorPulley = compPulley;
+    // 4 Cast Load-Bearing Mounting Feet seated cleanly on the shelf
+    for (const fx of [-0.43, 0.43]) {
+      for (const fz of [-0.63, 0.28]) {
+        addPart(compGroup, new THREE.BoxGeometry(0.25, 0.20, 0.28), castShadeMat, [fx, -0.58, fz]);
+        addPart(compGroup, new THREE.BoxGeometry(0.19, 0.39, 0.20), aluminumMat, [fx, -0.79, fz]);
+        addPart(compGroup, new THREE.BoxGeometry(0.34, 0.10, 0.34), castShadeMat, [fx, -1.035, fz]);
+        addPart(compGroup, new THREE.CylinderGeometry(0.032, 0.032, 0.04, 6), steelMat, [fx + 0.09, -0.97, fz + 0.09]);
+      }
+    }
 
-    const clutchPlate = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.52, 0.52, 0.08, 20).rotateZ(Math.PI / 2),
-      compAlumMat
-    );
-    clutchPlate.position.set(1.24, 0, 0);
-    this._addInkedOutline(clutchPlate);
-    compGroup.add(clutchPlate);
-    this.acClutchPlate = clutchPlate;
+    // Top Cast Suction/Discharge Manifold + Color-Coded Service Ports
+    addPart(compGroup, new THREE.BoxGeometry(0.92, 0.25, 0.66), castShadeMat, [0, 0.60, -0.35]);
+    addPart(compGroup, new THREE.BoxGeometry(0.68, 0.18, 0.52), aluminumMat, [0.03, 0.78, -0.36]);
+    for (const [px, pz, pr, capHex] of [
+      [-0.32, -0.39, 0.16, 0x2563eb],
+      [0.34, -0.32, 0.115, 0xdc2626],
+    ]) {
+      addPart(compGroup, new THREE.CylinderGeometry(pr * 1.45, pr * 1.45, 0.14, 20), castShadeMat, [px, 0.91, pz]);
+      addPart(compGroup, new THREE.CylinderGeometry(pr * 1.15, pr * 1.15, 0.10, 6), brightAlMat, [px, 1.02, pz]);
+      addPart(
+        compGroup,
+        new THREE.CylinderGeometry(pr * 0.78, pr * 0.78, 0.14, 16),
+        new THREE.MeshStandardMaterial({ color: capHex, roughness: 0.35, metalness: 0.3 }),
+        [px, 1.14, pz]
+      );
+      addPart(compGroup, new THREE.TorusGeometry(pr * 0.72, 0.016, 8, 20), brassMat, [px, 1.21, pz], [Math.PI / 2, 0, 0]);
+    }
+
+    // Side Clutch Coil Electrical Connector
+    addPart(compGroup, new THREE.BoxGeometry(0.23, 0.20, 0.25), blackMat, [-0.67, -0.22, 0.05]);
+    addPart(compGroup, new THREE.BoxGeometry(0.13, 0.10, 0.09), steelMat, [-0.69, -0.22, 0.20]);
+
+    // Compressor Multi-Groove Pulley Group (rotates around Z with belt!)
+    const compPulleyGroup = new THREE.Group();
+    compPulleyGroup.position.set(0, 0, 0.88);
+    addPart(compPulleyGroup, new THREE.CylinderGeometry(0.57, 0.57, 0.26, 32), blackMat, [0, 0, 0], [Math.PI / 2, 0, 0]);
+    for (let g = 0; g < 6; g++) {
+      addPart(compPulleyGroup, new THREE.TorusGeometry(0.545, 0.016, 8, 32), steelMat, [0, 0, -0.07 + g * 0.028]);
+    }
+    compGroup.add(compPulleyGroup);
+    this.acCompressorPulley = compPulleyGroup;
+
+    // Magnetic Clutch Pressure Plate & Hub (engages inward & spins only when energized!)
+    const clutchPlateGroup = new THREE.Group();
+    clutchPlateGroup.position.set(0, 0, 1.06);
+    addPart(clutchPlateGroup, new THREE.CylinderGeometry(0.455, 0.455, 0.07, 28), blackMat, [0, 0, 0], [Math.PI / 2, 0, 0]);
+    addPart(clutchPlateGroup, new THREE.CylinderGeometry(0.355, 0.355, 0.055, 24), castShadeMat, [0, 0, 0.05], [Math.PI / 2, 0, 0]);
+    addPart(clutchPlateGroup, new THREE.CylinderGeometry(0.24, 0.24, 0.07, 24), blackMat, [0, 0, 0.10], [Math.PI / 2, 0, 0]);
+    addPart(clutchPlateGroup, new THREE.CylinderGeometry(0.13, 0.13, 0.09, 20), brightAlMat, [0, 0, 0.14], [Math.PI / 2, 0, 0]);
+    for (let i = 0; i < 6; i++) {
+      const a = (i * Math.PI) / 3;
+      addPart(clutchPlateGroup, new THREE.CylinderGeometry(0.036, 0.036, 0.03, 12), brightAlMat, [Math.cos(a) * 0.36, Math.sin(a) * 0.36, 0.06], [Math.PI / 2, 0, 0]);
+    }
+    compGroup.add(clutchPlateGroup);
+    this.acClutchPlate = clutchPlateGroup;
 
     equipGroup.add(compGroup);
 
-    // 3. V-Belt between motor pulley and compressor pulley
-    const beltLen = 4.7;
-    const beltGeo = new THREE.BoxGeometry(beltLen, 0.1, 0.22);
-    const beltUpper = new THREE.Mesh(beltGeo, rubberBeltMat);
-    beltUpper.position.set(-3.15, shelfTopY + 1.8, 1.2);
-    const beltLower = new THREE.Mesh(beltGeo, rubberBeltMat);
-    beltLower.position.set(-3.15, shelfTopY + 0.55, 1.2);
-    equipGroup.add(beltUpper, beltLower);
+    // ------------------------------------------------------------------------
+    // 3. TWIN V-BELT CONNECTING MOTOR FRONT PULLEY (-7.6) TO COMPRESSOR PULLEY (-2.3)
+    // ------------------------------------------------------------------------
+    const beltSpan = 5.3;
+    const beltMidX = (-7.6 + -2.3) / 2;
+    const beltZ = 1.45 + 1.08;
+    const beltUpper = addPart(equipGroup, new THREE.BoxGeometry(beltSpan, 0.11, 0.22), rubberMat, [beltMidX, shelfTopY + 1.79, beltZ]);
+    addPart(equipGroup, new THREE.BoxGeometry(beltSpan, 0.11, 0.22), rubberMat, [beltMidX, shelfTopY + 0.57, beltZ]);
     this.acBeltMesh = beltUpper;
 
-    // 4. Condenser Radiator Matrix & Extra Fan on the right of lower shelf
+    // ------------------------------------------------------------------------
+    // 4. REALISTIC 3D RECEIVER-DRIER & SIGHT GLASS (Ported from receiver_drier_ac_threejs)
+    // ------------------------------------------------------------------------
+    const drierGroup = new THREE.Group();
+    drierGroup.position.set(2.3, shelfTopY + 1.24, 1.45);
+    drierGroup.scale.setScalar(0.95);
+
+    addPart(drierGroup, new THREE.CylinderGeometry(0.54, 0.54, 1.92, 28), blackMat, [0, 0, 0]);
+    addPart(drierGroup, new THREE.CylinderGeometry(0.56, 0.56, 0.14, 28), steelMat, [0, 0.96, 0]);
+    addPart(drierGroup, new THREE.CylinderGeometry(0.56, 0.56, 0.14, 28), steelMat, [0, -0.96, 0]);
+    addPart(drierGroup, new THREE.CylinderGeometry(0.46, 0.54, 0.12, 24), brightAlMat, [0, 1.06, 0]);
+    // Top inlet & outlet brass hex unions
+    for (const [dx, pr] of [[-0.24, 0.12], [0.24, 0.10]]) {
+      addPart(drierGroup, new THREE.CylinderGeometry(pr * 1.3, pr * 1.3, 0.20, 16), steelMat, [dx, 1.18, 0]);
+      addPart(drierGroup, new THREE.CylinderGeometry(pr, pr, 0.14, 6), brassMat, [dx, 1.34, 0]);
+    }
+    // Front crystal sight glass bezel & cyan lens
+    addPart(drierGroup, new THREE.CylinderGeometry(0.18, 0.18, 0.10, 20), brightAlMat, [0.24, 0.34, 0.52], [Math.PI / 2, 0, 0]);
+    addPart(
+      drierGroup,
+      new THREE.CylinderGeometry(0.135, 0.135, 0.04, 20),
+      new THREE.MeshPhysicalMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.78, roughness: 0.08, clearcoat: 1.0 }),
+      [0.24, 0.34, 0.57],
+      [Math.PI / 2, 0, 0]
+    );
+    // Mounting bracket straps
+    for (const sy of [-0.52, 0.52]) {
+      addPart(drierGroup, new THREE.TorusGeometry(0.56, 0.04, 8, 28), steelMat, [0, sy, 0], [Math.PI / 2, 0, 0]);
+    }
+    equipGroup.add(drierGroup);
+
+    // ------------------------------------------------------------------------
+    // 5. REALISTIC 3D PARALLEL-FLOW CONDENSER & EXTRA FAN (Ported from kondensor_ac_threejs)
+    // ------------------------------------------------------------------------
     const condGroup = new THREE.Group();
-    condGroup.position.set(6.2, shelfTopY + 1.85, 1.2);
+    condGroup.position.set(7.6, shelfTopY + 1.68, 1.45);
 
-    const condMatrix = new THREE.Mesh(
-      new THREE.BoxGeometry(3.6, 3.4, 0.35),
-      compAlumMat
-    );
-    this._addInkedOutline(condMatrix);
-    condGroup.add(condMatrix);
+    // Main heat-exchanger core frame + vertical aluminum header tanks
+    addPart(condGroup, new THREE.BoxGeometry(4.1, 2.75, 0.26), castShadeMat, [0, 0, 0]);
+    for (const hx of [-2.18, 2.18]) {
+      addPart(condGroup, new THREE.BoxGeometry(0.32, 2.95, 0.46), aluminumMat, [hx, 0, 0]);
+      addPart(condGroup, new THREE.BoxGeometry(0.36, 0.09, 0.50), steelMat, [hx, 1.48, 0]);
+      addPart(condGroup, new THREE.BoxGeometry(0.36, 0.09, 0.50), steelMat, [hx, -1.48, 0]);
+    }
+    // Horizontal parallel-flow flat tubes
+    for (let row = 0; row < 13; row++) {
+      const ry = -1.14 + row * 0.19;
+      addPart(condGroup, new THREE.BoxGeometry(3.96, 0.05, 0.32), brightAlMat, [0, ry, 0.02]);
+    }
+    // Inlet & outlet top header unions
+    addPart(condGroup, new THREE.CylinderGeometry(0.09, 0.09, 0.26, 16), brassMat, [-2.18, 1.62, 0]);
+    addPart(condGroup, new THREE.CylinderGeometry(0.08, 0.08, 0.26, 16), brassMat, [2.18, 1.62, 0]);
+    // Bottom mounting brackets resting on shelf
+    for (const bx of [-2.18, 2.18]) {
+      addPart(condGroup, new THREE.BoxGeometry(0.44, 0.22, 0.58), steelMat, [bx, -1.56, 0]);
+    }
 
-    const shroud = new THREE.Mesh(
-      new THREE.CylinderGeometry(1.3, 1.35, 0.32, 28).rotateX(Math.PI / 2),
-      blackMat
-    );
-    shroud.position.set(0, 0, 0.25);
-    this._addInkedOutline(shroud);
-    condGroup.add(shroud);
+    // Circular Electric Extra Fan Shroud & 5-Blade Swept Impeller on Front Face (+Z)
+    addPart(condGroup, new THREE.TorusGeometry(1.18, 0.09, 12, 32), blackMat, [0, 0, 0.26]);
+    for (let st = 0; st < 4; st++) {
+      const a = (st * Math.PI) / 2 + Math.PI / 4;
+      addPart(condGroup, new THREE.BoxGeometry(2.35, 0.08, 0.06), blackMat, [0, 0, 0.22], [0, 0, a]);
+    }
 
     const fanBlades = new THREE.Group();
-    fanBlades.position.set(0, 0, 0.35);
-    const fanHub = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.3, 0.3, 0.18, 18).rotateX(Math.PI / 2),
-      blackMat
-    );
-    fanBlades.add(fanHub);
+    fanBlades.position.set(0, 0, 0.32);
+    addPart(fanBlades, new THREE.CylinderGeometry(0.32, 0.34, 0.18, 20), blackMat, [0, 0, 0], [Math.PI / 2, 0, 0]);
+    addPart(fanBlades, new THREE.CylinderGeometry(0.12, 0.12, 0.20, 14), brightAlMat, [0, 0, 0.02], [Math.PI / 2, 0, 0]);
     for (let b = 0; b < 5; b++) {
       const ang = (b * Math.PI * 2) / 5;
-      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.28, 0.04), blackMat);
-      blade.position.set(Math.cos(ang) * 0.65, Math.sin(ang) * 0.65, 0);
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.26, 0.04), blackMat);
+      blade.position.set(Math.cos(ang) * 0.64, Math.sin(ang) * 0.64, 0);
       blade.rotation.z = ang + 0.35;
+      blade.rotation.y = 0.22;
       fanBlades.add(blade);
     }
     condGroup.add(fanBlades);
     this.acCondenserFan = fanBlades;
-
     equipGroup.add(condGroup);
 
-    // 5. Receiver-Drier & Sight Glass
-    const drierGroup = new THREE.Group();
-    drierGroup.position.set(2.8, shelfTopY + 1.35, 1.2);
-    const drierBody = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.38, 0.38, 1.9, 20),
-      new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.5, metalness: 0.3 })
-    );
-    this._addInkedOutline(drierBody);
-    drierGroup.add(drierBody);
+    // ------------------------------------------------------------------------
+    // 6. CURVED SAE J2064 RUBBER REFRIGERANT HOSES + CRIMPED FERRULES
+    // ------------------------------------------------------------------------
+    // High-Pressure Discharge Hose: Compressor Red Port -> Condenser Left Inlet
+    const hpCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(-1.93, shelfTopY + 2.48, 1.10),
+      new THREE.Vector3(-1.3, shelfTopY + 3.05, 1.15),
+      new THREE.Vector3(1.8, shelfTopY + 3.25, 1.10),
+      new THREE.Vector3(5.42, shelfTopY + 3.30, 1.45),
+    ]);
+    addPart(equipGroup, new THREE.TubeGeometry(hpCurve, 28, 0.095, 10, false), rubberMat);
+    addPart(equipGroup, new THREE.CylinderGeometry(0.12, 0.12, 0.18, 14), brightAlMat, [-1.93, shelfTopY + 2.52, 1.10]);
 
-    const sg = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12, 0.12, 0.2, 14).rotateX(Math.PI / 2),
-      new THREE.MeshStandardMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.8, roughness: 0.1, metalness: 0.1 })
-    );
-    sg.position.set(0, 0.75, 0.32);
-    drierGroup.add(sg);
+    // Liquid Line Hose: Condenser Right Outlet -> Receiver-Drier Inlet
+    const liqCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(9.78, shelfTopY + 3.30, 1.45),
+      new THREE.Vector3(9.95, shelfTopY + 2.95, 0.80),
+      new THREE.Vector3(6.2, shelfTopY + 2.75, 0.72),
+      new THREE.Vector3(2.07, shelfTopY + 2.54, 1.45),
+    ]);
+    addPart(equipGroup, new THREE.TubeGeometry(liqCurve, 28, 0.078, 10, false), aluminumMat);
 
-    equipGroup.add(drierGroup);
-
-    // 6. Flexible SAE J2064 Hoses
-    const hoseMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.85 });
-    const h1Curve = new THREE.QuadraticBezierCurve3(
-      new THREE.Vector3(-1.8, shelfTopY + 1.8, 1.45),
-      new THREE.Vector3(2.0, shelfTopY + 3.2, 1.5),
-      new THREE.Vector3(4.4, shelfTopY + 3.0, 1.2)
-    );
-    const hose1 = new THREE.Mesh(new THREE.TubeGeometry(h1Curve, 20, 0.12, 8, false), hoseMat);
-    equipGroup.add(hose1);
-
-    const h2Curve = new THREE.QuadraticBezierCurve3(
-      new THREE.Vector3(4.4, shelfTopY + 0.6, 1.2),
-      new THREE.Vector3(3.6, shelfTopY + 0.4, 1.2),
-      new THREE.Vector3(2.8, shelfTopY + 0.5, 1.2)
-    );
-    const hose2 = new THREE.Mesh(new THREE.TubeGeometry(h2Curve, 16, 0.1, 8, false), hoseMat);
-    equipGroup.add(hose2);
+    // Suction Return Hose: Evaporator Return (upper panel) -> Compressor Blue Suction Port
+    const sucCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(-2.65, shelfTopY + 2.48, 1.03),
+      new THREE.Vector3(-3.3, shelfTopY + 2.95, 0.85),
+      new THREE.Vector3(-4.5, shelfTopY + 3.45, 0.55),
+    ]);
+    addPart(equipGroup, new THREE.TubeGeometry(sucCurve, 20, 0.105, 10, false), rubberMat);
+    addPart(equipGroup, new THREE.CylinderGeometry(0.13, 0.13, 0.18, 14), brightAlMat, [-2.65, shelfTopY + 2.52, 1.03]);
 
     this.standGroup.add(equipGroup);
   }
@@ -1953,13 +2238,13 @@ export class TrainerScene3D {
     geo.center();
     const mesh = new THREE.Mesh(geo, material);
     mesh.position.set(...pos);
-    mesh.castShadow = false;
+    mesh.castShadow = true;
     mesh.receiveShadow = true;
     return mesh;
   }
 
   _getSnailHornBadgeTexture() {
-    const key = 'snail_horn_12v_410hz';
+    const key = 'snail_horn_12v_410hz_v2';
     if (this.textureCache.has(key)) return this.textureCache.get(key);
     if (typeof document === 'undefined') return null;
 
@@ -1968,27 +2253,154 @@ export class TrainerScene3D {
     canvas.height = 256;
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      ctx.fillStyle = '#14171a';
+      ctx.fillStyle = '#181c20';
       ctx.fillRect(0, 0, 256, 256);
 
-      ctx.strokeStyle = '#64748b';
-      ctx.lineWidth = 6;
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 7;
       ctx.beginPath();
       ctx.arc(128, 128, 112, 0, Math.PI * 2);
       ctx.stroke();
 
-      ctx.fillStyle = '#e2e8f0';
-      ctx.font = 'bold 46px "Plus Jakarta Sans", "Inter", sans-serif';
+      ctx.fillStyle = '#f1f5f9';
+      ctx.font = '800 50px "Plus Jakarta Sans", "Inter", sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('12V', 128, 102);
-      ctx.font = 'bold 40px "JetBrains Mono", monospace';
+      ctx.fillText('12V', 128, 98);
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = '700 42px "JetBrains Mono", monospace';
       ctx.fillText('410Hz', 128, 156);
+    }
+    const tex = this._applyTextureCrispness(new THREE.CanvasTexture(canvas));
+    this.textureCache.set(key, tex);
+    return tex;
+  }
+
+  _getBatterySpecTexture() {
+    const key = 'battery_spec_12v_45ah';
+    if (this.textureCache.has(key)) return this.textureCache.get(key);
+    if (typeof document === 'undefined') return null;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      // OEM Automotive Battery Front Decal (NS40ZL 12V 45Ah)
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(0, 0, 512, 256);
+
+      // Top red automotive brand header strip
+      ctx.fillStyle = '#b91c1c';
+      ctx.fillRect(0, 0, 512, 68);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '800 32px "Plus Jakarta Sans", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('WIROTO POWER · NS40ZL', 24, 36);
+
+      // Main rating readout
+      ctx.fillStyle = '#0f172a';
+      ctx.font = '800 56px "JetBrains Mono", monospace';
+      ctx.fillText('12V 45Ah', 24, 132);
+
+      ctx.fillStyle = '#475569';
+      ctx.font = '600 22px "Inter", sans-serif';
+      ctx.fillText('CCA 360A · LEAD-ACID AUTOMOTIVE', 24, 182);
+
+      // Electrolyte UPPER / LOWER level markings on right
+      ctx.strokeStyle = '#dc2626';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(356, 108);
+      ctx.lineTo(488, 108);
+      ctx.stroke();
+      ctx.fillStyle = '#b91c1c';
+      ctx.font = '700 18px "JetBrains Mono", monospace';
+      ctx.fillText('UPPER LEVEL', 358, 98);
+
+      ctx.strokeStyle = '#334155';
+      ctx.beginPath();
+      ctx.moveTo(356, 204);
+      ctx.lineTo(488, 204);
+      ctx.stroke();
+      ctx.fillStyle = '#334155';
+      ctx.fillText('LOWER LEVEL', 358, 224);
+
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 6;
+      ctx.strokeRect(3, 3, 506, 250);
+    }
+    const tex = this._applyTextureCrispness(new THREE.CanvasTexture(canvas));
+    this.textureCache.set(key, tex);
+    return tex;
+  }
+
+  _getGlowSpriteTexture() {
+    const key = 'lamp_radial_glow_v1';
+    if (this.textureCache.has(key)) return this.textureCache.get(key);
+    if (typeof document === 'undefined') return null;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const grad = ctx.createRadialGradient(128, 128, 2, 128, 128, 126);
+      grad.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+      grad.addColorStop(0.18, 'rgba(255, 252, 235, 0.85)');
+      grad.addColorStop(0.45, 'rgba(255, 244, 200, 0.32)');
+      grad.addColorStop(0.75, 'rgba(255, 235, 170, 0.08)');
+      grad.addColorStop(1.0, 'rgba(255, 235, 170, 0.0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 256, 256);
     }
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     this.textureCache.set(key, tex);
     return tex;
+  }
+
+  _getBeamConeTexture() {
+    const key = 'headlamp_beam_cone_v1';
+    if (this.textureCache.has(key)) return this.textureCache.get(key);
+    if (typeof document === 'undefined') return null;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      // Smooth axial fade from lamp lens (y=0) outward to air (y=256)
+      const grad = ctx.createLinearGradient(0, 0, 0, 256);
+      grad.addColorStop(0.0, 'rgba(255, 252, 230, 0.62)');
+      grad.addColorStop(0.25, 'rgba(255, 248, 210, 0.34)');
+      grad.addColorStop(0.65, 'rgba(255, 240, 185, 0.10)');
+      grad.addColorStop(1.0, 'rgba(255, 240, 185, 0.0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 128, 256);
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this.textureCache.set(key, tex);
+    return tex;
+  }
+
+  _createLampGlowSprite(colorHex, scaleX, scaleY, pos = [0, 0, 0]) {
+    const tex = this._getGlowSpriteTexture();
+    const mat = new THREE.SpriteMaterial({
+      map: tex,
+      color: colorHex,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(scaleX, scaleY, 1);
+    sprite.position.set(...pos);
+    return sprite;
   }
 
   _buildSingleHeadlampUnit(unitW, unitH, zBase, visuals, lowIndex = 0, highIndex = 1) {
@@ -2112,154 +2524,171 @@ export class TrainerScene3D {
       unit.add(screw);
     }
 
-    // 5. Parabolic Silver Reflector Bowl + H4 Bulb Capsule + Glare Shield inside
+    // 5. Mirror Parabolic Silver Reflector Bowl + Inner Low/High Emissive Zones (BEHIND clear Fresnel glass!)
+    const mirrorReflMat = new THREE.MeshStandardMaterial({
+      color: 0xf1f5f9,
+      metalness: 0.96,
+      roughness: 0.08,
+    });
     const reflFrame = this._createRoundedBoxMesh(
-      unitW * 0.86,
-      unitH * 0.82,
+      unitW * 0.88,
+      unitH * 0.84,
       0.06,
-      0.09,
-      reflectorMat,
-      [0, 0, zBase + 0.31],
-      0x475569,
-      0.4
+      0.085,
+      mirrorReflMat,
+      [0, 0, zBase + 0.30]
     );
     unit.add(reflFrame);
 
+    // Parabolic dish cone curving inward toward the H4 bulb
     const bowl = new THREE.Mesh(
-      new THREE.CylinderGeometry(unitH * 0.34, unitH * 0.42, 0.08, 20).rotateX(Math.PI / 2),
-      reflectorMat
+      new THREE.CylinderGeometry(unitH * 0.42, unitH * 0.22, 0.14, 24, 1, true).rotateX(Math.PI / 2),
+      new THREE.MeshStandardMaterial({
+        color: 0xf8fafc,
+        metalness: 0.96,
+        roughness: 0.07,
+        side: THREE.DoubleSide,
+      })
     );
-    bowl.scale.set(1.28, 0.92, 1);
-    bowl.position.set(0, 0, zBase + 0.33);
+    bowl.scale.set(1.32, 0.92, 1);
+    bowl.position.set(0, 0, zBase + 0.35);
     unit.add(bowl);
 
-    // 6. Fluted Glass Front Lens + Upper (LOW BEAM) & Lower (HIGH BEAM) Emissive Lens/Reflector Zones
-    const flutedTex = this._getFlutedLensTexture('headlamp');
-    const glassMat = new THREE.MeshStandardMaterial({
-      color: 0x94a3b8,
-      map: flutedTex,
-      metalness: 0.25,
-      roughness: 0.2,
-      transparent: true,
-      opacity: 0.36,
-    });
-    const glassLens = this._createRoundedBoxMesh(
-      unitW * 0.88,
-      unitH * 0.86,
-      0.03,
-      0.085,
-      glassMat,
-      [0, 0, zBase + 0.43]
-    );
-    unit.add(glassLens);
-
-    // Upper (LOW BEAM) & Lower (HIGH BEAM) high-contrast emissive zones right on the front reflector/lens plane
-    // Dark slate-metallic when OFF (#475569) -> vivid golden halogen (#facc15 / #fde047) when ON!
+    // Inner parabolic reflector zones (mirror-silver when OFF -> radiant golden-white halogen when ON)
     const zoneW = unitW * 0.82;
-    const zoneH = unitH * 0.39;
+    const zoneH = unitH * 0.37;
     const lowGlowMat = new THREE.MeshStandardMaterial({
-      color: 0x475569,
-      map: flutedTex,
+      color: 0xdce4ee,
       emissive: 0x000000,
       emissiveIntensity: 0,
-      metalness: 0.3,
-      roughness: 0.2,
+      metalness: 0.92,
+      roughness: 0.12,
     });
     const lowReflectorZone = new THREE.Mesh(new THREE.PlaneGeometry(zoneW, zoneH), lowGlowMat);
-    lowReflectorZone.position.set(0, zoneH * 0.51, zBase + 0.452);
+    lowReflectorZone.position.set(0, zoneH * 0.51, zBase + 0.338);
     unit.add(lowReflectorZone);
     visuals.emissiveMeshes.push({
       mesh: lowReflectorZone,
-      color: 0xfacc15,
-      idleColor: 0x475569,
+      color: 0xfef08a,
+      idleColor: 0xdce4ee,
       index: lowIndex,
     });
 
     const highGlowMat = new THREE.MeshStandardMaterial({
-      color: 0x475569,
-      map: flutedTex,
+      color: 0xd5dee8,
       emissive: 0x000000,
       emissiveIntensity: 0,
-      metalness: 0.3,
-      roughness: 0.2,
+      metalness: 0.92,
+      roughness: 0.12,
     });
     const highReflectorZone = new THREE.Mesh(new THREE.PlaneGeometry(zoneW, zoneH), highGlowMat);
-    highReflectorZone.position.set(0, -zoneH * 0.51, zBase + 0.452);
+    highReflectorZone.position.set(0, -zoneH * 0.51, zBase + 0.338);
     unit.add(highReflectorZone);
     visuals.emissiveMeshes.push({
       mesh: highReflectorZone,
-      color: 0xfde047,
-      idleColor: 0x475569,
+      color: 0xfffbeb,
+      idleColor: 0xd5dee8,
       index: highIndex,
     });
 
-    // Halogen beam flare ring around center bulb (lights up on LOW & expands/brightens on HIGH)
-    const flareRingMat = new THREE.MeshBasicMaterial({
-      color: 0xf59e0b,
+    // Natural radial halogen bloom sprite + soft volumetric light beam cone (no boxy edges!)
+    const bloomSprite = this._createLampGlowSprite(0xfef08a, unitW * 1.45, unitH * 1.35, [0, 0, zBase + 0.54]);
+    unit.add(bloomSprite);
+
+    const beamLen = 3.2;
+    const beamGeo = new THREE.CylinderGeometry(unitH * 0.28, unitH * 1.05, beamLen, 24, 1, true);
+    beamGeo.translate(0, -beamLen / 2, 0);
+    beamGeo.rotateX(Math.PI / 2); // Base at z=0, expanding outward toward +Z
+    const beamMat = new THREE.MeshBasicMaterial({
+      map: this._getBeamConeTexture(),
+      color: 0xfef3c7,
       transparent: true,
       opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
     });
-    const flareRing = new THREE.Mesh(new THREE.RingGeometry(0.11, 0.34, 24), flareRingMat);
-    flareRing.position.set(0, 0, zBase + 0.468);
-    unit.add(flareRing);
-    if (!visuals.headlampFlares) visuals.headlampFlares = [];
-    visuals.headlampFlares.push({ mesh: flareRing, lowIndex, highIndex });
+    const beamCone = new THREE.Mesh(beamGeo, beamMat);
+    beamCone.position.set(0, 0, zBase + 0.46);
+    unit.add(beamCone);
 
-    // H4 Bulb metal base, glowing halogen glass capsule, low-beam glare shield & brass filament supports
+    if (!visuals.headlampFlares) visuals.headlampFlares = [];
+    visuals.headlampFlares.push({
+      mesh: bloomSprite,
+      beamCone,
+      baseScaleX: unitW * 1.45,
+      baseScaleY: unitH * 1.35,
+      lowIndex,
+      highIndex,
+    });
+
+    // H4 Bulb metal base, clear glass halogen capsule, chrome anti-glare shield & filament supports
     const bulbBase = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.11, 0.13, 0.1, 14).rotateX(Math.PI / 2),
+      new THREE.CylinderGeometry(0.11, 0.13, 0.1, 16).rotateX(Math.PI / 2),
       brassMat
     );
-    bulbBase.position.set(0, 0, zBase + 0.39);
+    bulbBase.position.set(0, 0, zBase + 0.35);
     unit.add(bulbBase);
 
-    const bulbCapsuleMat = new THREE.MeshStandardMaterial({
-      color: 0x64748b,
+    const bulbCapsuleMat = new THREE.MeshPhysicalMaterial({
+      color: 0xe2e8f0,
       emissive: 0x000000,
       emissiveIntensity: 0,
-      roughness: 0.1,
-      metalness: 0.1,
+      roughness: 0.08,
+      metalness: 0.05,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.06,
     });
-    const bulbCapsule = new THREE.Mesh(new THREE.SphereGeometry(0.095, 14, 12), bulbCapsuleMat);
+    const bulbCapsule = new THREE.Mesh(new THREE.SphereGeometry(0.095, 16, 14), bulbCapsuleMat);
     bulbCapsule.scale.set(1.0, 1.0, 1.55);
-    bulbCapsule.position.set(0, 0, zBase + 0.475);
+    bulbCapsule.position.set(0, 0, zBase + 0.39);
     unit.add(bulbCapsule);
     visuals.emissiveMeshes.push({
       mesh: bulbCapsule,
-      color: 0xfef08a,
-      idleColor: 0x64748b,
+      color: 0xfffbeb,
+      idleColor: 0xe2e8f0,
       index: lowIndex,
     });
 
-    const glareShield = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.065, 0.03), chromeMat);
-    glareShield.position.set(0, -0.06, zBase + 0.485);
+    const glareShield = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.11, 0.12, 0.05, 16).rotateX(Math.PI / 2),
+      chromeMat
+    );
+    glareShield.position.set(0, 0, zBase + 0.435);
     unit.add(glareShield);
 
     for (const sx of [-0.14, 0.14]) {
-      const sup = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.2, 0.025), brassMat);
-      sup.position.set(sx, 0, zBase + 0.42);
+      const sup = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.18, 0.022), brassMat);
+      sup.position.set(sx, 0, zBase + 0.37);
       unit.add(sup);
     }
 
-    const ribMat = new THREE.MeshStandardMaterial({
-      color: 0xcbd5e1,
-      metalness: 0.35,
-      roughness: 0.22,
+    // 6. Crystal-Clear Fluted Fresnel Glass Front Lens (MeshPhysicalMaterial clearcoat, zero dark grid!)
+    const flutedTex = this._getFlutedLensTexture('headlamp');
+    const glassMat = new THREE.MeshPhysicalMaterial({
+      color: 0xf8fafc,
+      map: flutedTex,
+      bumpMap: flutedTex,
+      bumpScale: 0.015,
+      metalness: 0.05,
+      roughness: 0.08,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.05,
+      ior: 1.52,
+      reflectivity: 0.92,
       transparent: true,
-      opacity: 0.42,
+      opacity: 0.34,
+      depthWrite: false,
     });
-    const ribW = unitW * 0.82;
-    const ribH = unitH * 0.8;
-    for (let i = -2; i <= 2; i++) {
-      const hRib = new THREE.Mesh(new THREE.BoxGeometry(ribW, 0.008, 0.008), ribMat);
-      hRib.position.set(0, i * (ribH / 5), zBase + 0.462);
-      unit.add(hRib);
-    }
-    for (let i = -3; i <= 3; i++) {
-      const vRib = new THREE.Mesh(new THREE.BoxGeometry(0.007, ribH, 0.008), ribMat);
-      vRib.position.set(i * (ribW / 7), 0, zBase + 0.462);
-      unit.add(vRib);
-    }
+    const glassLens = this._createRoundedBoxMesh(
+      unitW * 0.89,
+      unitH * 0.86,
+      0.045,
+      0.085,
+      glassMat,
+      [0, 0, zBase + 0.465]
+    );
+    unit.add(glassLens);
 
     return unit;
   }
@@ -2267,68 +2696,113 @@ export class TrainerScene3D {
   _buildVerticalAmberSignUnit(unitW, unitH, zBase, visuals, index = 0) {
     const unit = new THREE.Group();
 
-    const housingGeo = new THREE.BoxGeometry(unitW, unitH, 0.22);
-    const housingMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.5, metalness: 0.3 });
-    const housing = new THREE.Mesh(housingGeo, housingMat);
-    housing.position.set(0, 0, zBase + 0.11);
-    housing.castShadow = true;
-    this._addInkedOutline(housing);
+    const housingMat = new THREE.MeshStandardMaterial({ color: 0x1c2026, roughness: 0.55, metalness: 0.25 });
+    const housing = this._createRoundedBoxMesh(unitW, unitH, 0.2, 0.07, housingMat, [0, 0, zBase + 0.1]);
     unit.add(housing);
 
-    // Clear fluted clearance housing + raised amber side turn block (exact match to Gambar 2 top corners!)
+    // Recessed silver parabolic reflector inside the corner lamp
+    const reflMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.92, roughness: 0.12 });
+    const innerRefl = this._createRoundedBoxMesh(unitW * 0.86, unitH * 0.88, 0.04, 0.05, reflMat, [0, 0, zBase + 0.19]);
+    unit.add(innerRefl);
+
+    // Clear fluted parking lens (PBR clearcoat) + raised amber turn-signal block
     const clearTex = this._getFlutedLensTexture('clear');
-    const mainLensGeo = new THREE.BoxGeometry(unitW * 0.86, unitH * 0.88, 0.15);
-    const mainLensMat = new THREE.MeshStandardMaterial({
-      color: 0xd1d5db,
+    const mainLensMat = new THREE.MeshPhysicalMaterial({
+      color: 0xf1f5f9,
       map: clearTex,
+      bumpMap: clearTex,
+      bumpScale: 0.014,
       emissive: 0x000000,
       emissiveIntensity: 0,
-      roughness: 0.22,
+      roughness: 0.12,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.06,
+      transparent: true,
+      opacity: 0.72,
     });
-    const mainLens = new THREE.Mesh(mainLensGeo, mainLensMat);
-    mainLens.position.set(0, 0, zBase + 0.24);
-    this._addInkedOutline(mainLens, 0x475569, 0.7);
+    const mainLens = this._createRoundedBoxMesh(unitW * 0.88, unitH * 0.89, 0.14, 0.06, mainLensMat, [0, 0, zBase + 0.25]);
     unit.add(mainLens);
 
     const amberTex = this._getFlutedLensTexture('amber');
-    const amberGeo = new THREE.BoxGeometry(unitW * 0.42, unitH * 0.44, 0.22);
-    const amberMat = new THREE.MeshStandardMaterial({
-      color: 0xd97706,
+    const amberMat = new THREE.MeshPhysicalMaterial({
+      color: 0xea580c,
       map: amberTex,
+      bumpMap: amberTex,
+      bumpScale: 0.016,
       emissive: 0x000000,
       emissiveIntensity: 0,
-      roughness: 0.22,
+      roughness: 0.14,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.06,
+      transparent: true,
+      opacity: 0.88,
     });
-    const amberLens = new THREE.Mesh(amberGeo, amberMat);
-    amberLens.position.set(-unitW * 0.2, unitH * 0.12, zBase + 0.28);
-    this._addInkedOutline(amberLens, 0x78350f, 0.75);
+    const amberLens = this._createRoundedBoxMesh(
+      unitW * 0.44,
+      unitH * 0.44,
+      0.16,
+      0.045,
+      amberMat,
+      [-unitW * 0.19, unitH * 0.14, zBase + 0.28]
+    );
     unit.add(amberLens);
+
+    // Stainless top & bottom mounting screws
+    const screwMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.88, roughness: 0.18 });
+    for (const sy of [-unitH * 0.37, unitH * 0.37]) {
+      const screw = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.032, 0.032, 0.03, 12).rotateX(Math.PI / 2),
+        screwMat
+      );
+      screw.position.set(0, sy, zBase + 0.335);
+      unit.add(screw);
+    }
 
     visuals.emissiveMeshes.push({
       mesh: amberLens,
       color: 0xf59e0b,
-      idleColor: 0xd97706,
+      idleColor: 0xea580c,
       index,
     });
     visuals.emissiveMeshes.push({
       mesh: mainLens,
       color: 0xfef08a,
-      idleColor: 0xd1d5db,
+      idleColor: 0xf1f5f9,
       index,
     });
+
+    const amberGlow = this._createLampGlowSprite(0xf59e0b, unitW * 1.45, unitH * 1.35, [0, 0.05, zBase + 0.42]);
+    unit.add(amberGlow);
+    if (!visuals.glowSprites) visuals.glowSprites = [];
+    visuals.glowSprites.push({ sprite: amberGlow, color: 0xf59e0b, maxOpacity: 0.78, index });
 
     return unit;
   }
 
   _createComponentMesh(comp) {
     const group = new THREE.Group();
-    const [x, y, z] = comp.pos;
+    const [x, y, rawZ] = comp.pos;
     const [w, h, d] = comp.size || [2.6, 2.0, 0.6];
+    const isConsole = comp.surface === 'console';
+    // Ensure vertical-board components (especially AC modules at z=0) sit cleanly ON FRONT of the board face (z=0.225)
+    const z = comp.type === 'battery_12v' || isConsole ? rawZ : Math.max(rawZ, 0.23);
     group.position.set(x, y, z);
-    group.userData = { componentId: comp.id, baseX: x, baseY: y, baseZ: z, type: comp.type };
+    if (isConsole && comp.tiltX) {
+      group.rotation.x = comp.tiltX;
+    }
+    group.userData = {
+      componentId: comp.id,
+      baseX: x,
+      baseY: y,
+      baseZ: z,
+      type: comp.type,
+      surface: comp.surface || 'board',
+      tiltX: comp.tiltX || 0,
+    };
 
     const visuals = {
       emissiveMeshes: [],
+      glowSprites: [],
       fuseMeshes: [],
       actuatorMesh: null,
       statusLed: null,
@@ -2337,53 +2811,69 @@ export class TrainerScene3D {
     };
 
     // ==========================================================================
-    // 1. 12V AUTOMOTIVE BATTERY (ACCU NS40ZL ON LOWER SHELF)
+    // 1. 12V AUTOMOTIVE BATTERY (ACCU NS40ZL ON LOWER SHELF — 100% PBR)
     // ==========================================================================
     if (comp.type === 'battery_12v') {
       const bodyH = h - 0.36;
-      const bodyGeo = new THREE.BoxGeometry(w, bodyH, d);
-      const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1e242b, roughness: 0.6 });
-      const body = new THREE.Mesh(bodyGeo, bodyMat);
-      body.position.set(0, -0.18, 0);
-      body.castShadow = true;
-      body.receiveShadow = true;
-      this._addInkedOutline(body);
+      const bodyMat = new THREE.MeshStandardMaterial({
+        color: 0x20252c,
+        roughness: 0.48,
+        metalness: 0.08,
+      });
+      const body = this._createRoundedBoxMesh(w, bodyH, d, 0.08, bodyMat, [0, -0.18, 0]);
       group.add(body);
 
-      // Surface-mounted front battery specification plate ("AKI 12V 45Ah")
-      const batTex = this._getPinSurfaceTexture('AKI 12V 45Ah', 'yellow', 0);
-      const plateGeo = new THREE.PlaneGeometry(w * 0.72, bodyH * 0.52);
-      const plateMat = new THREE.MeshBasicMaterial({ color: 0xfef08a, map: batTex });
-      const plate = new THREE.Mesh(plateGeo, plateMat);
-      plate.position.set(0, -0.18, d / 2 + 0.02);
-      this._addInkedOutline(plate, 0x1e293b, 0.7);
-      group.add(plate);
-
-      // Crimson-red battery cover
-      const lidH = 0.36;
-      const lidGeo = new THREE.BoxGeometry(w + 0.08, lidH, d + 0.08);
-      const lidMat = new THREE.MeshStandardMaterial({ color: 0xc92a2a, roughness: 0.45 });
-      const lid = new THREE.Mesh(lidGeo, lidMat);
-      lid.position.set(0, h / 2 - lidH / 2, 0);
-      lid.castShadow = true;
-      this._addInkedOutline(lid);
-      group.add(lid);
-
-      // 6 Yellow cell filler caps along the top cover
-      for (let i = 0; i < 6; i++) {
-        const capGeo = new THREE.CylinderGeometry(0.14, 0.14, 0.14, 14);
-        const capMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.35 });
-        const cap = new THREE.Mesh(capGeo, capMat);
-        cap.position.set(-1.5 + i * 0.6, h / 2 + 0.07, -0.35);
-        this._addInkedOutline(cap);
-        group.add(cap);
+      // Molded structural polypropylene ribs on sides
+      for (const sx of [-w * 0.42, 0, w * 0.42]) {
+        const rib = new THREE.Mesh(new THREE.BoxGeometry(0.12, bodyH * 0.84, d + 0.04), bodyMat);
+        rib.position.set(sx, -0.18, 0);
+        group.add(rib);
       }
 
-      const handleGeo = new THREE.BoxGeometry(w * 0.65, 0.08, 0.18);
-      const handleMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.6 });
+      // Dedicated crisp automotive front specification decal ("WIROTO POWER · 12V 45Ah")
+      const batTex = this._getBatterySpecTexture();
+      const plateGeo = new THREE.PlaneGeometry(w * 0.78, bodyH * 0.62);
+      const plateMat = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        map: batTex,
+        roughness: 0.35,
+        metalness: 0.04,
+      });
+      const plate = new THREE.Mesh(plateGeo, plateMat);
+      plate.position.set(0, -0.18, d / 2 + 0.025);
+      group.add(plate);
+
+      // Crimson-red satin battery cover
+      const lidH = 0.36;
+      const lidMat = new THREE.MeshPhysicalMaterial({
+        color: 0xb91c1c,
+        roughness: 0.32,
+        metalness: 0.05,
+        clearcoat: 0.45,
+        clearcoatRoughness: 0.25,
+      });
+      const lid = this._createRoundedBoxMesh(w + 0.08, lidH, d + 0.08, 0.06, lidMat, [0, h / 2 - lidH / 2, 0]);
+      group.add(lid);
+
+      // 6 Yellow coin-slot cell filler caps along the top cover
+      const capMat = new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.32, metalness: 0.06 });
+      const slotMat = new THREE.MeshStandardMaterial({ color: 0x713f12, roughness: 0.7 });
+      for (let i = 0; i < 6; i++) {
+        const capX = -w * 0.34 + i * (w * 0.136);
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.14, 0.13, 16), capMat);
+        cap.position.set(capX, h / 2 + 0.065, -0.35);
+        cap.castShadow = true;
+        group.add(cap);
+
+        const slot = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.025, 0.032), slotMat);
+        slot.position.set(capX, h / 2 + 0.13, -0.35);
+        group.add(slot);
+      }
+
+      const handleGeo = new THREE.BoxGeometry(w * 0.62, 0.08, 0.16);
+      const handleMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.55 });
       const handle = new THREE.Mesh(handleGeo, handleMat);
-      handle.position.set(0, h / 2 + 0.14, 0.1);
-      this._addInkedOutline(handle);
+      handle.position.set(0, h / 2 + 0.12, 0.12);
       group.add(handle);
     } else if (comp.variant === 'unified_slave') {
       // Slave half of unified Combination Switch (e.g., SW_TURN sharing the cell of SW_DIMMER in Fig. 06)
@@ -2413,21 +2903,21 @@ export class TrainerScene3D {
 
       const headerBadge = this._createBlueHeaderBadge(
         headerText,
-        Math.min(w * 0.86, comp.variant === 'unified_master' ? 5.4 : 2.8),
-        0.21
+        Math.min(w * 0.88, comp.variant === 'unified_master' ? 5.6 : 2.9),
+        0.22
       );
-      headerBadge.position.set(0, h / 2 - 0.15, 0.095);
+      headerBadge.position.set(0, h / 2 - 0.14, 0.095);
       group.add(headerBadge);
 
       const zBase = 0.08;
-      // Position 3D hardware neatly between the top blue header badge and the bottom pin socket strip
-      const hwY = 0.14;
+      // Strict 3-Zone vertical discipline: Zone 1 (Top Header), Zone 2 (3D Hardware at hwY), Zone 3 (Schematic + Pins below)
+      const hwY = h <= 1.55 ? 0.14 : Math.max(0.24, h * 0.155);
 
       // ========================================================================
       // 3. TYPE-SPECIFIC REALISTIC 3D AUTOMOTIVE HARDWARE
       // ========================================================================
       if (comp.type === 'ignition') {
-        const basePlateGeo = new THREE.CylinderGeometry(0.55, 0.62, 0.16, 22);
+        const basePlateGeo = new THREE.CylinderGeometry(0.42, 0.48, 0.14, 22);
         basePlateGeo.rotateX(Math.PI / 2);
         const darkMetalMat = new THREE.MeshStandardMaterial({
           color: 0x374151,
@@ -2435,11 +2925,10 @@ export class TrainerScene3D {
           roughness: 0.35,
         });
         const basePlate = new THREE.Mesh(basePlateGeo, darkMetalMat);
-        basePlate.position.set(0, hwY, zBase + 0.08);
-        this._addInkedOutline(basePlate);
+        basePlate.position.set(0, hwY - 0.04, zBase + 0.07);
         group.add(basePlate);
 
-        const bezelGeo = new THREE.CylinderGeometry(0.42, 0.48, 0.32, 22);
+        const bezelGeo = new THREE.CylinderGeometry(0.32, 0.38, 0.28, 22);
         bezelGeo.rotateX(Math.PI / 2);
         const chromeMat = new THREE.MeshStandardMaterial({
           color: 0xe2e8f0,
@@ -2447,26 +2936,23 @@ export class TrainerScene3D {
           roughness: 0.2,
         });
         const bezel = new THREE.Mesh(bezelGeo, chromeMat);
-        bezel.position.set(0, hwY, zBase + 0.24);
-        this._addInkedOutline(bezel);
+        bezel.position.set(0, hwY - 0.04, zBase + 0.20);
         group.add(bezel);
 
         const keyPivot = new THREE.Group();
-        keyPivot.position.set(0, hwY, zBase + 0.42);
+        keyPivot.position.set(0, hwY - 0.04, zBase + 0.36);
 
-        const bladeGeo = new THREE.BoxGeometry(0.09, 0.22, 0.32);
+        const bladeGeo = new THREE.BoxGeometry(0.08, 0.18, 0.28);
         const blade = new THREE.Mesh(bladeGeo, chromeMat);
-        blade.position.set(0, 0, 0.08);
+        blade.position.set(0, 0, 0.07);
         blade.userData = { interactComponentId: comp.id };
-        this._addInkedOutline(blade);
         keyPivot.add(blade);
 
-        const bowGeo = new THREE.BoxGeometry(0.14, 0.56, 0.36);
+        const bowGeo = new THREE.BoxGeometry(0.12, 0.46, 0.30);
         const bowMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4 });
         const bow = new THREE.Mesh(bowGeo, bowMat);
-        bow.position.set(0, 0, 0.28);
+        bow.position.set(0, 0, 0.24);
         bow.userData = { interactComponentId: comp.id };
-        this._addInkedOutline(bow);
         keyPivot.add(bow);
 
         group.add(keyPivot);
@@ -2504,81 +2990,94 @@ export class TrainerScene3D {
 
           const fuseColor = fuseColors[i % fuseColors.length];
           const fuseGeo = new THREE.BoxGeometry(0.64, 0.3, 0.32);
-          const fuseMat = new THREE.MeshStandardMaterial({
+          const fuseMat = new THREE.MeshPhysicalMaterial({
             color: fuseColor,
             transparent: true,
-            opacity: 0.88,
-            roughness: 0.22,
+            opacity: 0.72,
+            roughness: 0.14,
+            clearcoat: 1.0,
+            clearcoatRoughness: 0.08,
           });
           const fuse = new THREE.Mesh(fuseGeo, fuseMat);
           fuse.position.set(offsetX, offsetY, zBase + 0.32);
+          fuse.castShadow = true;
           fuse.userData = { baseColor: fuseColor };
-          this._addInkedOutline(fuse);
           group.add(fuse);
+
+          // Visible internal zinc fuse link element inside the translucent blade housing
+          const elemMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.92, roughness: 0.18 });
+          const elem = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.055, 0.055), elemMat);
+          elem.position.set(0, 0, 0.03);
+          fuse.add(elem);
 
           visuals.fuseMeshes.push(fuse);
         }
       } else if (comp.type === 'relay_4p' || comp.type === 'relay_5p') {
         const is5P = comp.type === 'relay_5p';
-        const tabGeo = new THREE.BoxGeometry(0.5, 0.28, 0.06);
-        const tabMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8, roughness: 0.28 });
+        const rScale = h <= 1.75 ? 0.84 : 0.94;
+        const tabGeo = new THREE.BoxGeometry(0.46 * rScale, 0.22 * rScale, 0.06);
+        const tabMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.88, roughness: 0.2 });
         const tab = new THREE.Mesh(tabGeo, tabMat);
-        tab.position.set(0, hwY + 0.34, zBase + 0.1);
-        this._addInkedOutline(tab);
+        tab.position.set(0, hwY + 0.28 * rScale, zBase + 0.09);
         group.add(tab);
 
-        const sockGeo = new THREE.BoxGeometry(0.96, 0.34, 0.42);
-        const sockMat = new THREE.MeshStandardMaterial({ color: is5P ? 0x1f2937 : 0xeab308, roughness: 0.42 });
-        const sock = new THREE.Mesh(sockGeo, sockMat);
-        sock.position.set(0, hwY - 0.18, zBase + 0.21);
-        sock.castShadow = true;
-        this._addInkedOutline(sock);
+        const sockMat = new THREE.MeshStandardMaterial({
+          color: is5P ? 0x1f2937 : 0xeab308,
+          roughness: 0.38,
+          metalness: 0.05,
+        });
+        const sock = this._createRoundedBoxMesh(0.94 * rScale, 0.3 * rScale, 0.4, 0.04, sockMat, [
+          0,
+          hwY - 0.19 * rScale,
+          zBase + 0.2,
+        ]);
         group.add(sock);
 
-        const cubeGeo = new THREE.BoxGeometry(0.92, 0.54, 0.52);
-        const cubeMat = new THREE.MeshStandardMaterial({ color: is5P ? 0x1d4ed8 : 0x1f2937, roughness: 0.48 });
-        const cube = new THREE.Mesh(cubeGeo, cubeMat);
-        cube.position.set(0, hwY + 0.12, zBase + 0.26);
-        cube.castShadow = true;
-        this._addInkedOutline(cube);
+        const cubeMat = new THREE.MeshPhysicalMaterial({
+          color: is5P ? 0x1d4ed8 : 0x1e242b,
+          roughness: 0.36,
+          metalness: 0.08,
+          clearcoat: 0.25,
+        });
+        const cube = this._createRoundedBoxMesh(0.88 * rScale, 0.48 * rScale, 0.48, 0.05, cubeMat, [
+          0,
+          hwY + 0.08 * rScale,
+          zBase + 0.25,
+        ]);
         group.add(cube);
 
-        const ledGeo = new THREE.SphereGeometry(0.11, 14, 14);
+        const ledGeo = new THREE.SphereGeometry(0.095, 14, 14);
         const ledMat = new THREE.MeshStandardMaterial({
           color: 0x334155,
           emissive: 0x000000,
-          roughness: 0.25,
+          roughness: 0.18,
         });
         const led = new THREE.Mesh(ledGeo, ledMat);
-        led.position.set(0, hwY + 0.12, zBase + 0.54);
-        this._addInkedOutline(led);
+        led.position.set(0, hwY + 0.08 * rScale, zBase + 0.51);
         group.add(led);
         visuals.statusLed = led;
       } else if (comp.type === 'flasher') {
-        const brkGeo = new THREE.BoxGeometry(0.48, 0.3, 0.06);
+        const brkGeo = new THREE.BoxGeometry(0.42, 0.24, 0.06);
         const brkMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.82, roughness: 0.25 });
         const brk = new THREE.Mesh(brkGeo, brkMat);
-        brk.position.set(0, hwY + 0.36, zBase + 0.1);
-        this._addInkedOutline(brk);
+        brk.position.set(0, hwY + 0.22, zBase + 0.09);
         group.add(brk);
 
-        const bodyGeo = new THREE.BoxGeometry(0.92, 0.64, 0.52);
-        const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.45 });
+        const bodyGeo = new THREE.BoxGeometry(0.78, 0.54, 0.44);
+        const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.42 });
         const body = new THREE.Mesh(bodyGeo, bodyMat);
-        body.position.set(0, hwY + 0.06, zBase + 0.26);
+        body.position.set(0, hwY - 0.04, zBase + 0.23);
         body.castShadow = true;
-        this._addInkedOutline(body);
         group.add(body);
 
-        const ledGeo = new THREE.SphereGeometry(0.11, 14, 14);
+        const ledGeo = new THREE.SphereGeometry(0.09, 14, 14);
         const ledMat = new THREE.MeshStandardMaterial({
           color: 0x334155,
           emissive: 0x000000,
-          roughness: 0.25,
+          roughness: 0.22,
         });
         const led = new THREE.Mesh(ledGeo, ledMat);
-        led.position.set(0, hwY + 0.08, zBase + 0.54);
-        this._addInkedOutline(led);
+        led.position.set(0, hwY - 0.02, zBase + 0.46);
         group.add(led);
         visuals.statusLed = led;
       } else if (comp.type === 'switch_combo') {
@@ -2788,9 +3287,10 @@ export class TrainerScene3D {
         this.interactiveTargets.push(btn);
         visuals.actuatorMesh = btn;
       } else if (comp.type === 'horn') {
-        // AUTHENTIC KLAKSON KEONG (SNAIL HORN 12V 410Hz, ≈ 90 x 85 x 75 mm, matching reference photo!)
+        // AUTHENTIC KLAKSON KEONG (SNAIL HORN 12V 410Hz, cleanly scaled inside Zone 2)
         const snailGroup = new THREE.Group();
-        snailGroup.position.set(0.06, hwY + 0.02, zBase);
+        snailGroup.position.set(0.04, hwY - 0.05, zBase);
+        snailGroup.scale.setScalar(0.84);
 
         const blackShellMat = new THREE.MeshStandardMaterial({
           color: 0x14171a,
@@ -2878,22 +3378,25 @@ export class TrainerScene3D {
 
         snailGroup.add(mouthGroup);
 
-        // 4. Center circular specification badge ("12V 410Hz") on front hub
+        // 4. Center circular specification badge ("12V 410Hz") — upright plane facing +Z
         const badgeTex = this._getSnailHornBadgeTexture();
         const centerHubMat = new THREE.MeshStandardMaterial({
           color: 0xffffff,
           map: badgeTex || null,
           emissive: 0x000000,
           emissiveIntensity: 0,
-          roughness: 0.3,
-          metalness: 0.2,
+          roughness: 0.28,
+          metalness: 0.18,
         });
-        const centerHub = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.28, 0.28, 0.05, 24).rotateX(Math.PI / 2),
-          centerHubMat
+        const hubBacking = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.28, 0.29, 0.05, 24).rotateX(Math.PI / 2),
+          new THREE.MeshStandardMaterial({ color: 0x1e242b, metalness: 0.4, roughness: 0.35 })
         );
-        centerHub.position.set(0.06, 0.02, 0.34);
-        this._addInkedOutline(centerHub, 0x334155, 0.75);
+        hubBacking.position.set(0.06, 0.02, 0.33);
+        snailGroup.add(hubBacking);
+
+        const centerHub = new THREE.Mesh(new THREE.CircleGeometry(0.275, 28), centerHubMat);
+        centerHub.position.set(0.06, 0.02, 0.36);
         snailGroup.add(centerHub);
 
         group.add(snailGroup);
@@ -2906,21 +3409,24 @@ export class TrainerScene3D {
         });
         visuals.hornDiscMesh = centerHub;
       } else if (comp.type === 'headlamp') {
-        const singleUnit = this._buildSingleHeadlampUnit(w * 0.78, h * 0.46, zBase, visuals, 0, 1);
-        singleUnit.position.set(0, hwY + 0.06, 0);
+        // Maintain realistic OEM ~1.55:1 rectangular headlamp aspect ratio strictly inside Zone 2
+        const hlH = Math.min(h * 0.40, 0.88);
+        const hlW = Math.min(w * 0.68, hlH * 1.62);
+        const singleUnit = this._buildSingleHeadlampUnit(hlW, hlH, zBase, visuals, 0, 1);
+        singleUnit.position.set(0, hwY - 0.02, 0);
         group.add(singleUnit);
       } else if (comp.type === 'lamp_amber') {
-        const singleAmber = this._buildVerticalAmberSignUnit(1.05, 0.96, zBase, visuals, 0);
-        singleAmber.position.set(0, hwY + 0.06, 0);
+        const singleAmber = this._buildVerticalAmberSignUnit(0.92, Math.min(h * 0.40, 0.84), zBase, visuals, 0);
+        singleAmber.position.set(0, hwY - 0.02, 0);
         group.add(singleAmber);
       } else if (comp.type === 'lamp_red_dual') {
-        // AUTHENTIC TAIL LAMP ASSEMBLY (Lampu Sein / Kota / Rem ≈ 340 x 95 x 70 mm)
-        // Beveled 3-chamber horizontal housing (Amber | Wide Red Tail/Stop | Clear Reverse) + 4 divider screws
-        const lampW = Math.min(w * 0.84, 5.2);
-        const lampH = 0.82;
-        const housingMat = new THREE.MeshStandardMaterial({ color: 0x171b1e, roughness: 0.38, metalness: 0.2 });
-        const reflMat = new THREE.MeshStandardMaterial({ color: 0xdce2e5, metalness: 0.9, roughness: 0.15 });
-        const screwMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.85, roughness: 0.2 });
+        // AUTHENTIC 100% PBR TAIL LAMP ASSEMBLY (3-Chamber Rear Combination Lamp)
+        // Recessed silver parabolic reflector cups + internal glass bulbs visible behind clearcoat fluted lenses!
+        const lampW = Math.min(w * 0.82, 5.0);
+        const lampH = Math.min(h * 0.36, 0.72);
+        const housingMat = new THREE.MeshStandardMaterial({ color: 0x171b1e, roughness: 0.42, metalness: 0.22 });
+        const reflMat = new THREE.MeshStandardMaterial({ color: 0xf1f5f9, metalness: 0.95, roughness: 0.09 });
+        const screwMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.9, roughness: 0.16 });
 
         const housing = this._createRoundedBoxMesh(
           lampW,
@@ -2928,37 +3434,59 @@ export class TrainerScene3D {
           0.22,
           0.08,
           housingMat,
-          [0, hwY + 0.08, zBase + 0.11]
+          [0, hwY + 0.06, zBase + 0.11]
         );
         group.add(housing);
 
-        // Internal silver reflector tray & miniature bulbs visible through the fluted lenses
         const innerRefl = this._createRoundedBoxMesh(
           lampW * 0.94,
           lampH * 0.82,
           0.04,
           0.05,
           reflMat,
-          [0, hwY + 0.08, zBase + 0.2],
-          0x334155,
-          0.35
+          [0, hwY + 0.06, zBase + 0.195]
         );
         group.add(innerRefl);
 
         const isRightSide = comp.id === 'TAIL_RH';
         const dir = isRightSide ? -1 : 1;
 
+        // Visible internal parabolic reflector cups + glass bulb spheres in each chamber
+        const bulbGlassMat = new THREE.MeshPhysicalMaterial({
+          color: 0xf8fafc,
+          roughness: 0.1,
+          clearcoat: 1.0,
+          transparent: true,
+          opacity: 0.7,
+        });
+        for (const bx of [-dir * (lampW * 0.355), -dir * (lampW * 0.115), dir * (lampW * 0.13), dir * (lampW * 0.365)]) {
+          const cup = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.24, 0.14, 0.07, 16, 1, true).rotateX(Math.PI / 2),
+            reflMat
+          );
+          cup.position.set(bx, hwY + 0.06, zBase + 0.21);
+          group.add(cup);
+
+          const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), bulbGlassMat);
+          bulb.position.set(bx, hwY + 0.06, zBase + 0.22);
+          group.add(bulb);
+        }
+
         const amberTex = this._getFlutedLensTexture('amber');
         const redTex = this._getFlutedLensTexture('red');
         const clearTex = this._getFlutedLensTexture('clear');
 
-        // Chamber 1: Amber Turn Signal Lens (Outer side)
-        const ambMat = new THREE.MeshStandardMaterial({
+        // Chamber 1: Amber Turn Signal Lens (PBR clearcoat fluted acrylic)
+        const ambMat = new THREE.MeshPhysicalMaterial({
           color: 0xd97706,
           map: amberTex,
-          roughness: 0.18,
+          bumpMap: amberTex,
+          bumpScale: 0.014,
+          roughness: 0.12,
+          clearcoat: 1.0,
+          clearcoatRoughness: 0.05,
           transparent: true,
-          opacity: 0.92,
+          opacity: 0.84,
         });
         const ambLens = this._createRoundedBoxMesh(
           lampW * 0.23,
@@ -2966,9 +3494,7 @@ export class TrainerScene3D {
           0.12,
           0.045,
           ambMat,
-          [-dir * (lampW * 0.355), hwY + 0.08, zBase + 0.25],
-          0x451a03,
-          0.65
+          [-dir * (lampW * 0.355), hwY + 0.06, zBase + 0.26]
         );
         group.add(ambLens);
         visuals.emissiveMeshes.push({
@@ -2979,14 +3505,18 @@ export class TrainerScene3D {
         });
 
         // Chamber 2A: Red Tail Lamp Lens (Middle-Outer)
-        const tailMat = new THREE.MeshStandardMaterial({
+        const tailMat = new THREE.MeshPhysicalMaterial({
           color: 0x991b1b,
           map: redTex,
+          bumpMap: redTex,
+          bumpScale: 0.014,
           emissive: 0x000000,
           emissiveIntensity: 0,
-          roughness: 0.18,
+          roughness: 0.12,
+          clearcoat: 1.0,
+          clearcoatRoughness: 0.05,
           transparent: true,
-          opacity: 0.92,
+          opacity: 0.84,
         });
         const tailLens = this._createRoundedBoxMesh(
           lampW * 0.24,
@@ -2994,9 +3524,7 @@ export class TrainerScene3D {
           0.13,
           0.03,
           tailMat,
-          [-dir * (lampW * 0.115), hwY + 0.08, zBase + 0.255],
-          0x450a0a,
-          0.65
+          [-dir * (lampW * 0.115), hwY + 0.06, zBase + 0.265]
         );
         group.add(tailLens);
         visuals.emissiveMeshes.push({
@@ -3007,14 +3535,18 @@ export class TrainerScene3D {
         });
 
         // Chamber 2B: Red Stop/Brake Lamp Lens (Middle-Inner)
-        const stopMat = new THREE.MeshStandardMaterial({
+        const stopMat = new THREE.MeshPhysicalMaterial({
           color: 0xb91c1c,
           map: redTex,
+          bumpMap: redTex,
+          bumpScale: 0.014,
           emissive: 0x000000,
           emissiveIntensity: 0,
-          roughness: 0.18,
+          roughness: 0.12,
+          clearcoat: 1.0,
+          clearcoatRoughness: 0.05,
           transparent: true,
-          opacity: 0.92,
+          opacity: 0.84,
         });
         const stopLens = this._createRoundedBoxMesh(
           lampW * 0.25,
@@ -3022,9 +3554,7 @@ export class TrainerScene3D {
           0.13,
           0.03,
           stopMat,
-          [dir * (lampW * 0.13), hwY + 0.08, zBase + 0.255],
-          0x450a0a,
-          0.65
+          [dir * (lampW * 0.13), hwY + 0.06, zBase + 0.265]
         );
         group.add(stopLens);
         visuals.emissiveMeshes.push({
@@ -3035,14 +3565,18 @@ export class TrainerScene3D {
         });
 
         // Chamber 3: Clear Reverse Lamp Lens (Inner side)
-        const revMat = new THREE.MeshStandardMaterial({
-          color: 0xe2e8f0,
+        const revMat = new THREE.MeshPhysicalMaterial({
+          color: 0xf1f5f9,
           map: clearTex,
+          bumpMap: clearTex,
+          bumpScale: 0.014,
           emissive: 0x000000,
           emissiveIntensity: 0,
-          roughness: 0.18,
+          roughness: 0.1,
+          clearcoat: 1.0,
+          clearcoatRoughness: 0.05,
           transparent: true,
-          opacity: 0.88,
+          opacity: 0.65,
         });
         const revLens = this._createRoundedBoxMesh(
           lampW * 0.2,
@@ -3050,52 +3584,62 @@ export class TrainerScene3D {
           0.12,
           0.045,
           revMat,
-          [dir * (lampW * 0.365), hwY + 0.08, zBase + 0.25],
-          0x334155,
-          0.65
+          [dir * (lampW * 0.365), hwY + 0.06, zBase + 0.26]
         );
         group.add(revLens);
         visuals.emissiveMeshes.push({
           mesh: revLens,
           color: 0xf8fafc,
-          idleColor: 0xe2e8f0,
+          idleColor: 0xf1f5f9,
           index: 3,
         });
 
-        // 4 Silver Lens Divider Screws at chamber borders (matching reference photo!)
+        // 4 Silver Lens Divider Screws at chamber borders
         for (const sx of [-dir * (lampW * 0.238), dir * (lampW * 0.26)]) {
           for (const sy of [lampH * 0.32, -lampH * 0.32]) {
             const divScrew = new THREE.Mesh(
               new THREE.CylinderGeometry(0.025, 0.025, 0.03, 12).rotateX(Math.PI / 2),
               screwMat
             );
-            divScrew.position.set(sx, hwY + 0.08 + sy, zBase + 0.325);
+            divScrew.position.set(sx, hwY + 0.06 + sy, zBase + 0.335);
             group.add(divScrew);
           }
         }
+
+        // Natural radial glow halos for each of the 4 rear combination chambers (Sign, 5W Tail, 21W Stop, Reverse)
+        const rearGlowSpecs = [
+          { x: -dir * (lampW * 0.355), color: 0xf59e0b, sx: lampW * 0.36, sy: lampH * 1.35, maxOpacity: 0.78, index: 0 },
+          { x: -dir * (lampW * 0.115), color: 0xef4444, sx: lampW * 0.34, sy: lampH * 1.25, maxOpacity: 0.56, index: 1 },
+          { x: dir * (lampW * 0.13), color: 0xff2a2a, sx: lampW * 0.44, sy: lampH * 1.65, maxOpacity: 0.92, index: 2 },
+          { x: dir * (lampW * 0.365), color: 0xfffbeb, sx: lampW * 0.34, sy: lampH * 1.35, maxOpacity: 0.80, index: 3 },
+        ];
+        for (const rg of rearGlowSpecs) {
+          const sp = this._createLampGlowSprite(rg.color, rg.sx, rg.sy, [rg.x, hwY + 0.06, zBase + 0.39]);
+          group.add(sp);
+          visuals.glowSprites.push({ sprite: sp, color: rg.color, maxOpacity: rg.maxOpacity, index: rg.index });
+        }
       } else if (comp.type === 'lamp_test') {
-        const housingGeo = new THREE.BoxGeometry(1.15, 0.88, 0.2);
+        const housingGeo = new THREE.BoxGeometry(1.02, 0.72, 0.18);
         const housingMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.55 });
         const housing = new THREE.Mesh(housingGeo, housingMat);
-        housing.position.set(0, hwY + 0.06, zBase + 0.1);
+        housing.position.set(0, hwY - 0.02, zBase + 0.09);
         housing.castShadow = true;
-        this._addInkedOutline(housing);
         group.add(housing);
 
         const clearTex = this._getFlutedLensTexture('clear');
-        const domeGeo = new THREE.BoxGeometry(0.96, 0.72, 0.2);
-        const domeMat = new THREE.MeshStandardMaterial({
+        const domeGeo = new THREE.BoxGeometry(0.86, 0.58, 0.18);
+        const domeMat = new THREE.MeshPhysicalMaterial({
           color: 0xcbd5e1,
           map: clearTex,
           emissive: 0x000000,
           emissiveIntensity: 0,
-          roughness: 0.22,
+          roughness: 0.16,
+          clearcoat: 1.0,
           transparent: true,
-          opacity: 0.94,
+          opacity: 0.92,
         });
         const dome = new THREE.Mesh(domeGeo, domeMat);
-        dome.position.set(0, hwY + 0.06, zBase + 0.22);
-        this._addInkedOutline(dome);
+        dome.position.set(0, hwY - 0.02, zBase + 0.19);
         group.add(dome);
 
         visuals.emissiveMeshes.push({
@@ -3104,12 +3648,15 @@ export class TrainerScene3D {
           idleColor: 0xcbd5e1,
           index: 0,
         });
+        const domeGlow = this._createLampGlowSprite(0xfef08a, 1.55, 1.30, [0, hwY - 0.02, zBase + 0.36]);
+        group.add(domeGlow);
+        visuals.glowSprites.push({ sprite: domeGlow, color: 0xfef08a, maxOpacity: 0.72, index: 0 });
       } else if (comp.type === 'indicator_cluster') {
         // 3 Horizontal Pilot Lights (Left: Amber Turn, Middle: Green Tail, Right: Blue High Beam)
         const pilotSpecs = [
-          { x: -0.65, y: hwY + 0.16, idle: 0x78350f, active: 0xf59e0b, key: 'pilotAmber' },
-          { x: 0.0, y: hwY + 0.16, idle: 0x14532d, active: 0x22c55e, key: 'pilotRed' },
-          { x: 0.65, y: hwY + 0.16, idle: 0x1e3a8a, active: 0x3b82f6, key: 'pilotBlue' },
+          { x: -0.65, y: hwY - 0.02, idle: 0x78350f, active: 0xf59e0b, key: 'pilotAmber', glowKey: 'pilotAmberGlow' },
+          { x: 0.0, y: hwY - 0.02, idle: 0x14532d, active: 0x22c55e, key: 'pilotRed', glowKey: 'pilotRedGlow' },
+          { x: 0.65, y: hwY - 0.02, idle: 0x1e3a8a, active: 0x3b82f6, key: 'pilotBlue', glowKey: 'pilotBlueGlow' },
         ];
         for (const p of pilotSpecs) {
           const bezelGeo = new THREE.CylinderGeometry(0.145, 0.175, 0.12, 16);
@@ -3130,7 +3677,12 @@ export class TrainerScene3D {
           const dome = new THREE.Mesh(domeGeo, domeMat);
           dome.position.set(p.x, p.y, zBase + 0.14);
           group.add(dome);
-          if (this.auxVisuals) this.auxVisuals[p.key] = dome;
+          const pGlow = this._createLampGlowSprite(p.active, 0.62, 0.62, [p.x, p.y, zBase + 0.28]);
+          group.add(pGlow);
+          if (this.auxVisuals) {
+            this.auxVisuals[p.key] = dome;
+            this.auxVisuals[p.glowKey] = pGlow;
+          }
         }
       } else if (comp.type === 'licence_lamp') {
         // Chrome Domed Licence Plate Lamp in center of Row 3 (matching Gambar 2!)
@@ -3153,7 +3705,12 @@ export class TrainerScene3D {
         const lens = new THREE.Mesh(lensGeo, lensMat);
         lens.position.set(0, hwY + 0.02, zBase + 0.14);
         group.add(lens);
-        if (this.auxVisuals) this.auxVisuals.licenceLens = lens;
+        const licGlow = this._createLampGlowSprite(0xfef08a, 1.05, 0.95, [0, hwY - 0.04, zBase + 0.34]);
+        group.add(licGlow);
+        if (this.auxVisuals) {
+          this.auxVisuals.licenceLens = lens;
+          this.auxVisuals.licenceGlow = licGlow;
+        }
       } else if (comp.type === 'power_rail' || comp.type === 'junction_post') {
         const blockGeo = new THREE.BoxGeometry(w * 0.68, 0.34, 0.2);
         const blockMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 });
@@ -3162,173 +3719,166 @@ export class TrainerScene3D {
         this._addInkedOutline(block);
         group.add(block);
       } else if (comp.type === 'buzzer') {
-        // 12V Piezoelectric Automotive Buzzer / Chime
-        const flangeGeo = new THREE.BoxGeometry(1.3, 0.18, 0.08);
+        // 12V Piezoelectric Automotive Buzzer / Chime (scaled cleanly inside Zone 2)
+        const flangeGeo = new THREE.BoxGeometry(1.1, 0.16, 0.08);
         const flangeMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 });
         const flange = new THREE.Mesh(flangeGeo, flangeMat);
-        flange.position.set(0, hwY, zBase + 0.06);
-        this._addInkedOutline(flange);
+        flange.position.set(0, hwY - 0.02, zBase + 0.06);
         group.add(flange);
 
-        const bodyGeo = new THREE.CylinderGeometry(0.52, 0.55, 0.45, 24);
+        const bodyGeo = new THREE.CylinderGeometry(0.38, 0.41, 0.38, 24);
         bodyGeo.rotateX(Math.PI / 2);
         const bodyMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.4 });
         const body = new THREE.Mesh(bodyGeo, bodyMat);
-        body.position.set(0, hwY, zBase + 0.28);
+        body.position.set(0, hwY - 0.02, zBase + 0.24);
         body.castShadow = true;
-        this._addInkedOutline(body);
         group.add(body);
 
-        const ventRingGeo = new THREE.RingGeometry(0.12, 0.38, 20);
+        const ventRingGeo = new THREE.RingGeometry(0.10, 0.29, 20);
         const ventRingMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.5 });
         const ventRing = new THREE.Mesh(ventRingGeo, ventRingMat);
-        ventRing.position.set(0, hwY, zBase + 0.51);
+        ventRing.position.set(0, hwY - 0.02, zBase + 0.44);
         group.add(ventRing);
 
-        const holeGeo = new THREE.CircleGeometry(0.11, 18);
+        const holeGeo = new THREE.CircleGeometry(0.09, 18);
         const holeMat = new THREE.MeshBasicMaterial({ color: 0x020617 });
         const hole = new THREE.Mesh(holeGeo, holeMat);
-        hole.position.set(0, hwY, zBase + 0.512);
+        hole.position.set(0, hwY - 0.02, zBase + 0.442);
         group.add(hole);
 
-        const waveGeo = new THREE.TorusGeometry(0.56, 0.035, 8, 24);
+        const waveGeo = new THREE.TorusGeometry(0.42, 0.03, 8, 24);
         const waveMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0 });
         const wave = new THREE.Mesh(waveGeo, waveMat);
-        wave.position.set(0, hwY, zBase + 0.52);
+        wave.position.set(0, hwY - 0.02, zBase + 0.45);
         group.add(wave);
         visuals.buzzerWave = wave;
         visuals.isBuzzer = true;
       } else if (comp.type === 'resistor_bank') {
         // Ceramic wirewound power resistors with heat sink fins (10Ω, 50Ω, 100Ω)
-        const baseMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.65 });
+        const baseMat = new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.65 });
         const leadMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.85, roughness: 0.25 });
-        const offsets = [-0.95, 0, 0.95];
+        const offsets = [-1.65, 0, 1.65];
 
         offsets.forEach((ox) => {
-          const blockGeo = new THREE.BoxGeometry(0.68, 0.92, 0.38);
+          const blockGeo = new THREE.BoxGeometry(0.62, 0.68, 0.34);
           const block = new THREE.Mesh(blockGeo, baseMat);
-          block.position.set(ox, hwY, zBase + 0.2);
+          block.position.set(ox, hwY - 0.02, zBase + 0.18);
           block.castShadow = true;
-          this._addInkedOutline(block, 0x475569, 0.7);
           group.add(block);
 
-          for (let r = -3; r <= 3; r++) {
-            const ribGeo = new THREE.BoxGeometry(0.62, 0.04, 0.05);
+          for (let r = -2; r <= 2; r++) {
+            const ribGeo = new THREE.BoxGeometry(0.56, 0.035, 0.045);
             const rib = new THREE.Mesh(ribGeo, baseMat);
-            rib.position.set(ox, hwY + r * 0.11, zBase + 0.4);
+            rib.position.set(ox, hwY - 0.02 + r * 0.11, zBase + 0.36);
             group.add(rib);
           }
 
-          for (const ey of [-0.46, 0.46]) {
-            const capGeo = new THREE.BoxGeometry(0.72, 0.08, 0.4);
+          for (const ey of [-0.34, 0.34]) {
+            const capGeo = new THREE.BoxGeometry(0.66, 0.07, 0.36);
             const cap = new THREE.Mesh(capGeo, leadMat);
-            cap.position.set(ox, hwY + ey, zBase + 0.2);
-            this._addInkedOutline(cap);
+            cap.position.set(ox, hwY - 0.02 + ey, zBase + 0.18);
             group.add(cap);
           }
         });
       } else if (comp.type === 'lamp_h4') {
-        // H4 Halogen Headlamp Bulb (P43t collar + dual filaments)
-        const collarGeo = new THREE.CylinderGeometry(0.65, 0.72, 0.15, 22);
+        // H4 Halogen Headlamp Bulb (P43t collar + dual filaments, scaled cleanly inside Zone 2)
+        const collarGeo = new THREE.CylinderGeometry(0.42, 0.47, 0.12, 22);
         collarGeo.rotateX(Math.PI / 2);
         const chromeMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.88, roughness: 0.18 });
         const collar = new THREE.Mesh(collarGeo, chromeMat);
-        collar.position.set(0, hwY, zBase + 0.1);
-        this._addInkedOutline(collar);
+        collar.position.set(0, hwY - 0.02, zBase + 0.09);
         group.add(collar);
 
-        const sockGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.28, 20);
+        const sockGeo = new THREE.CylinderGeometry(0.30, 0.30, 0.22, 20);
         sockGeo.rotateX(Math.PI / 2);
         const sock = new THREE.Mesh(sockGeo, chromeMat);
-        sock.position.set(0, hwY, zBase + 0.22);
-        this._addInkedOutline(sock);
+        sock.position.set(0, hwY - 0.02, zBase + 0.19);
         group.add(sock);
 
-        const glassGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.72, 18);
+        const glassGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.56, 18);
         glassGeo.rotateX(Math.PI / 2);
-        const glassMat = new THREE.MeshStandardMaterial({
+        const glassMat = new THREE.MeshPhysicalMaterial({
           color: 0xf8fafc,
           transparent: true,
           opacity: 0.42,
-          roughness: 0.15,
-          metalness: 0.1,
+          roughness: 0.12,
+          clearcoat: 1.0,
         });
         const glass = new THREE.Mesh(glassGeo, glassMat);
-        glass.position.set(0, hwY, zBase + 0.58);
-        this._addInkedOutline(glass, 0x64748b, 0.45);
+        glass.position.set(0, hwY - 0.02, zBase + 0.48);
         group.add(glass);
 
-        const capGeo = new THREE.CylinderGeometry(0.31, 0.31, 0.12, 18);
+        const capGeo = new THREE.CylinderGeometry(0.23, 0.23, 0.10, 18);
         capGeo.rotateX(Math.PI / 2);
         const capMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 });
         const cap = new THREE.Mesh(capGeo, capMat);
-        cap.position.set(0, hwY, zBase + 0.95);
-        this._addInkedOutline(cap);
+        cap.position.set(0, hwY - 0.02, zBase + 0.78);
         group.add(cap);
 
-        const fil1Geo = new THREE.CylinderGeometry(0.04, 0.04, 0.24, 10);
+        const fil1Geo = new THREE.CylinderGeometry(0.032, 0.032, 0.18, 10);
         const filMat1 = new THREE.MeshStandardMaterial({
           color: 0x71717a,
           emissive: 0x000000,
           roughness: 0.3,
         });
         const fil1 = new THREE.Mesh(fil1Geo, filMat1);
-        fil1.position.set(0, hwY + 0.08, zBase + 0.52);
+        fil1.position.set(0, hwY + 0.04, zBase + 0.44);
         group.add(fil1);
         visuals.emissiveMeshes.push({ mesh: fil1, color: 0xfacc15, index: 0, idleColor: 0x71717a });
 
-        const fil2Geo = new THREE.CylinderGeometry(0.04, 0.04, 0.24, 10);
+        const fil2Geo = new THREE.CylinderGeometry(0.032, 0.032, 0.18, 10);
         const filMat2 = new THREE.MeshStandardMaterial({
           color: 0x71717a,
           emissive: 0x000000,
           roughness: 0.3,
         });
         const fil2 = new THREE.Mesh(fil2Geo, filMat2);
-        fil2.position.set(0, hwY - 0.08, zBase + 0.65);
+        fil2.position.set(0, hwY - 0.08, zBase + 0.55);
         group.add(fil2);
         visuals.emissiveMeshes.push({ mesh: fil2, color: 0xfef08a, index: 1, idleColor: 0x71717a });
+
+        const h4GlowLow = this._createLampGlowSprite(0xfde68a, 1.35, 1.35, [0, hwY + 0.02, zBase + 0.62]);
+        const h4GlowHigh = this._createLampGlowSprite(0xfffbeb, 1.85, 1.85, [0, hwY - 0.04, zBase + 0.66]);
+        group.add(h4GlowLow, h4GlowHigh);
+        visuals.glowSprites.push({ sprite: h4GlowLow, color: 0xfde68a, maxOpacity: 0.78, index: 0 });
+        visuals.glowSprites.push({ sprite: h4GlowHigh, color: 0xfffbeb, maxOpacity: 0.92, index: 1 });
       } else if (comp.type === 'motor_small') {
-        // 12V Windshield Washer Pump & Electric Motor
-        const bodyGeo = new THREE.CylinderGeometry(0.44, 0.44, 1.15, 20);
+        // 12V Windshield Washer Pump & Electric Motor (scaled cleanly inside Zone 2)
+        const bodyGeo = new THREE.CylinderGeometry(0.32, 0.32, 1.05, 20);
         bodyGeo.rotateZ(Math.PI / 2);
         const bodyMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.45 });
         const body = new THREE.Mesh(bodyGeo, bodyMat);
-        body.position.set(-0.15, hwY, zBase + 0.28);
+        body.position.set(-0.14, hwY - 0.02, zBase + 0.24);
         body.castShadow = true;
-        this._addInkedOutline(body);
         group.add(body);
 
-        for (const bx of [-0.45, 0.15]) {
-          const strapGeo = new THREE.CylinderGeometry(0.47, 0.47, 0.1, 20);
+        for (const bx of [-0.42, 0.14]) {
+          const strapGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.09, 20);
           strapGeo.rotateZ(Math.PI / 2);
           const strapMat = new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.7, roughness: 0.3 });
           const strap = new THREE.Mesh(strapGeo, strapMat);
-          strap.position.set(bx, hwY, zBase + 0.28);
-          this._addInkedOutline(strap);
+          strap.position.set(bx, hwY - 0.02, zBase + 0.24);
           group.add(strap);
         }
 
-        const pumpGeo = new THREE.CylinderGeometry(0.34, 0.38, 0.42, 18);
+        const pumpGeo = new THREE.CylinderGeometry(0.25, 0.28, 0.38, 18);
         pumpGeo.rotateZ(Math.PI / 2);
         const pumpMat = new THREE.MeshStandardMaterial({ color: 0x27272a, roughness: 0.4 });
         const pump = new THREE.Mesh(pumpGeo, pumpMat);
-        pump.position.set(0.62, hwY, zBase + 0.28);
-        this._addInkedOutline(pump);
+        pump.position.set(0.56, hwY - 0.02, zBase + 0.24);
         group.add(pump);
 
-        const spoutGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.36, 12);
+        const spoutGeo = new THREE.CylinderGeometry(0.075, 0.075, 0.28, 12);
         const spoutMat = new THREE.MeshStandardMaterial({ color: 0x3f3f46, roughness: 0.5 });
         const spout = new THREE.Mesh(spoutGeo, spoutMat);
-        spout.position.set(0.62, hwY + 0.26, zBase + 0.28);
-        this._addInkedOutline(spout);
+        spout.position.set(0.56, hwY + 0.18, zBase + 0.24);
         group.add(spout);
 
-        const rotorGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.08, 12);
+        const rotorGeo = new THREE.CylinderGeometry(0.14, 0.14, 0.08, 12);
         rotorGeo.rotateZ(Math.PI / 2);
         const rotorMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.4 });
         const rotor = new THREE.Mesh(rotorGeo, rotorMat);
-        rotor.position.set(0.85, hwY, zBase + 0.28);
-        this._addInkedOutline(rotor);
+        rotor.position.set(0.76, hwY - 0.02, zBase + 0.24);
         group.add(rotor);
         visuals.actuatorMesh = rotor;
         visuals.isMotor = true;
@@ -3366,48 +3916,51 @@ export class TrainerScene3D {
           group.add(dome);
 
           visuals.emissiveMeshes.push({ mesh: lens, color: colors[idx], index: idx, idleColor: idleCol });
+          const ledGlow = this._createLampGlowSprite(colors[idx], 0.85, 0.85, [ox, hwY, zBase + 0.44]);
+          group.add(ledGlow);
+          visuals.glowSprites.push({ sprite: ledGlow, color: colors[idx], maxOpacity: 0.78, index: idx });
         });
       } else if (comp.type === 'lamp_small') {
-        // Clear Automotive Bayonet Bulb (BA15s socket)
-        const sockGeo = new THREE.CylinderGeometry(0.32, 0.32, 0.3, 18);
+        // Clear Automotive Bayonet Bulb (BA15s socket, scaled cleanly inside Zone 2)
+        const sockGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.24, 18);
         sockGeo.rotateX(Math.PI / 2);
         const brassMat = new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.75, roughness: 0.35 });
         const sock = new THREE.Mesh(sockGeo, brassMat);
-        sock.position.set(0, hwY, zBase + 0.15);
-        this._addInkedOutline(sock);
+        sock.position.set(0, hwY - 0.02, zBase + 0.13);
         group.add(sock);
 
-        const glassGeo = new THREE.SphereGeometry(0.44, 20, 20);
-        const glassMat = new THREE.MeshStandardMaterial({
+        const glassGeo = new THREE.SphereGeometry(0.34, 20, 20);
+        const glassMat = new THREE.MeshPhysicalMaterial({
           color: 0xf8fafc,
           transparent: true,
           opacity: 0.42,
-          roughness: 0.15,
-          metalness: 0.1,
+          roughness: 0.12,
+          clearcoat: 1.0,
         });
         const glass = new THREE.Mesh(glassGeo, glassMat);
-        glass.position.set(0, hwY, zBase + 0.44);
-        this._addInkedOutline(glass, 0x64748b, 0.4);
+        glass.position.set(0, hwY - 0.02, zBase + 0.38);
         group.add(glass);
 
-        const filGeo = new THREE.TorusGeometry(0.12, 0.035, 8, 16);
+        const filGeo = new THREE.TorusGeometry(0.10, 0.028, 8, 16);
         const filMat = new THREE.MeshStandardMaterial({
           color: 0x52525b,
           emissive: 0x000000,
           roughness: 0.3,
         });
         const fil = new THREE.Mesh(filGeo, filMat);
-        fil.position.set(0, hwY, zBase + 0.44);
+        fil.position.set(0, hwY - 0.02, zBase + 0.38);
         group.add(fil);
         visuals.emissiveMeshes.push({ mesh: fil, color: 0xfacc15, index: 0, idleColor: 0x52525b });
+        const smallGlow = this._createLampGlowSprite(0xfef08a, 1.35, 1.35, [0, hwY - 0.02, zBase + 0.50]);
+        group.add(smallGlow);
+        visuals.glowSprites.push({ sprite: smallGlow, color: 0xfef08a, maxOpacity: 0.85, index: 0 });
       } else if (comp.type === 'switch_blower_rotary') {
-        // Rotary Blower Speed Selector Knob (0, 1, 2, 3)
-        const bezelGeo = new THREE.CylinderGeometry(0.55, 0.62, 0.14, 24);
+        // Rotary Blower Speed Selector Knob (0, 1, 2, 3) — Zone 2 scaled
+        const bezelGeo = new THREE.CylinderGeometry(0.42, 0.47, 0.12, 24);
         bezelGeo.rotateX(Math.PI / 2);
         const bezelMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.6, roughness: 0.3 });
         const bezel = new THREE.Mesh(bezelGeo, bezelMat);
-        bezel.position.set(0, hwY, zBase + 0.08);
-        this._addInkedOutline(bezel);
+        bezel.position.set(0, hwY - 0.02, zBase + 0.07);
         group.add(bezel);
 
         const dialCanvas = document.createElement('canvas');
@@ -3431,27 +3984,25 @@ export class TrainerScene3D {
           dctx.fillStyle = '#38bdf8';
           dctx.fillText('FAN', 128, 140);
         }
-        const dialTex = new THREE.CanvasTexture(dialCanvas);
-        dialTex.colorSpace = THREE.SRGBColorSpace;
+        const dialTex = this._applyTextureCrispness(new THREE.CanvasTexture(dialCanvas));
         const dialPlate = new THREE.Mesh(
-          new THREE.CircleGeometry(0.5, 24),
+          new THREE.CircleGeometry(0.39, 24),
           new THREE.MeshBasicMaterial({ map: dialTex })
         );
-        dialPlate.position.set(0, hwY, zBase + 0.16);
+        dialPlate.position.set(0, hwY - 0.02, zBase + 0.14);
         group.add(dialPlate);
 
-        const knobGeo = new THREE.CylinderGeometry(0.32, 0.36, 0.28, 20);
+        const knobGeo = new THREE.CylinderGeometry(0.24, 0.28, 0.24, 20);
         knobGeo.rotateX(Math.PI / 2);
         const knobMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.35, metalness: 0.2 });
         const knob = new THREE.Mesh(knobGeo, knobMat);
-        knob.position.set(0, hwY, zBase + 0.3);
-        knob.userData = { interactComponentId: comp.id, baseZ: zBase + 0.3 };
-        this._addInkedOutline(knob);
+        knob.position.set(0, hwY - 0.02, zBase + 0.26);
+        knob.userData = { interactComponentId: comp.id, baseZ: zBase + 0.26 };
 
-        const notchGeo = new THREE.BoxGeometry(0.06, 0.22, 0.08);
+        const notchGeo = new THREE.BoxGeometry(0.05, 0.17, 0.07);
         const notchMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
         const notch = new THREE.Mesh(notchGeo, notchMat);
-        notch.position.set(0, 0.12, 0.12);
+        notch.position.set(0, 0.09, 0.10);
         knob.add(notch);
 
         group.add(knob);
@@ -3459,29 +4010,27 @@ export class TrainerScene3D {
         visuals.actuatorMesh = knob;
       } else if (comp.type === 'switch_ac_push') {
         // Push-button A/C On/Off Switch with internal green LED indicator
-        const bezelGeo = new THREE.BoxGeometry(0.95, 0.95, 0.16);
+        const bezelGeo = new THREE.BoxGeometry(0.76, 0.76, 0.14);
         const bezelMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.5 });
         const bezel = new THREE.Mesh(bezelGeo, bezelMat);
-        bezel.position.set(0, hwY, zBase + 0.09);
-        this._addInkedOutline(bezel);
+        bezel.position.set(0, hwY - 0.02, zBase + 0.08);
         group.add(bezel);
 
-        const btnGeo = new THREE.BoxGeometry(0.72, 0.72, 0.22);
+        const btnGeo = new THREE.BoxGeometry(0.58, 0.58, 0.20);
         const btnMat = new THREE.MeshStandardMaterial({ color: 0x27272a, roughness: 0.4 });
         const btn = new THREE.Mesh(btnGeo, btnMat);
-        btn.position.set(0, hwY, zBase + 0.22);
-        btn.userData = { interactComponentId: comp.id, baseZ: zBase + 0.22 };
-        this._addInkedOutline(btn);
+        btn.position.set(0, hwY - 0.02, zBase + 0.20);
+        btn.userData = { interactComponentId: comp.id, baseZ: zBase + 0.20 };
         group.add(btn);
 
-        const ledGeo = new THREE.BoxGeometry(0.42, 0.12, 0.06);
+        const ledGeo = new THREE.BoxGeometry(0.34, 0.10, 0.05);
         const ledMat = new THREE.MeshStandardMaterial({
           color: 0x14532d,
           emissive: 0x000000,
           roughness: 0.2,
         });
         const led = new THREE.Mesh(ledGeo, ledMat);
-        led.position.set(0, -0.16, 0.12);
+        led.position.set(0, -0.14, 0.11);
         btn.add(led);
         visuals.statusLed = led;
 
@@ -3498,24 +4047,23 @@ export class TrainerScene3D {
           actx.textBaseline = 'middle';
           actx.fillText('A/C', 64, 32);
         }
-        const acBtnTex = new THREE.CanvasTexture(acBtnCanvas);
+        const acBtnTex = this._applyTextureCrispness(new THREE.CanvasTexture(acBtnCanvas));
         const acLabel = new THREE.Mesh(
-          new THREE.PlaneGeometry(0.45, 0.22),
+          new THREE.PlaneGeometry(0.38, 0.18),
           new THREE.MeshBasicMaterial({ map: acBtnTex, transparent: true })
         );
-        acLabel.position.set(0, 0.12, 0.12);
+        acLabel.position.set(0, 0.10, 0.11);
         btn.add(acLabel);
 
         this.interactiveTargets.push(btn);
         visuals.actuatorMesh = btn;
       } else if (comp.type === 'thermostat_ac') {
         // Thermostat Temperature Control Knob (Warm <-> Cold)
-        const bezelGeo = new THREE.CylinderGeometry(0.52, 0.58, 0.14, 22);
+        const bezelGeo = new THREE.CylinderGeometry(0.41, 0.46, 0.12, 22);
         bezelGeo.rotateX(Math.PI / 2);
         const bezelMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.75, roughness: 0.25 });
         const bezel = new THREE.Mesh(bezelGeo, bezelMat);
-        bezel.position.set(0, hwY, zBase + 0.08);
-        this._addInkedOutline(bezel);
+        bezel.position.set(0, hwY - 0.02, zBase + 0.07);
         group.add(bezel);
 
         const tCanvas = document.createElement('canvas');
@@ -3543,31 +4091,30 @@ export class TrainerScene3D {
           tctx.fillStyle = '#38bdf8';
           tctx.fillText('COLD', 180, 220);
         }
-        const tTex = new THREE.CanvasTexture(tCanvas);
+        const tTex = this._applyTextureCrispness(new THREE.CanvasTexture(tCanvas));
         const tDisc = new THREE.Mesh(
-          new THREE.CircleGeometry(0.48, 22),
+          new THREE.CircleGeometry(0.38, 22),
           new THREE.MeshBasicMaterial({ map: tTex })
         );
-        tDisc.position.set(0, hwY, zBase + 0.16);
+        tDisc.position.set(0, hwY - 0.02, zBase + 0.14);
         group.add(tDisc);
 
-        const knobGeo = new THREE.CylinderGeometry(0.28, 0.32, 0.26, 20);
+        const knobGeo = new THREE.CylinderGeometry(0.22, 0.26, 0.22, 20);
         knobGeo.rotateX(Math.PI / 2);
         const knobMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.3 });
         const knob = new THREE.Mesh(knobGeo, knobMat);
-        knob.position.set(0, hwY, zBase + 0.29);
-        knob.userData = { interactComponentId: comp.id, baseZ: zBase + 0.29 };
-        this._addInkedOutline(knob);
+        knob.position.set(0, hwY - 0.02, zBase + 0.25);
+        knob.userData = { interactComponentId: comp.id, baseZ: zBase + 0.25 };
 
-        const notchGeo = new THREE.BoxGeometry(0.05, 0.18, 0.08);
+        const notchGeo = new THREE.BoxGeometry(0.045, 0.15, 0.07);
         const notch = new THREE.Mesh(notchGeo, new THREE.MeshBasicMaterial({ color: 0x38bdf8 }));
-        notch.position.set(0, 0.1, 0.11);
+        notch.position.set(0, 0.08, 0.10);
         knob.add(notch);
 
-        const tubeCurve = new THREE.TorusGeometry(0.48, 0.03, 8, 24);
+        const tubeCurve = new THREE.TorusGeometry(0.38, 0.024, 8, 24);
         const tubeMat = new THREE.MeshStandardMaterial({ color: 0xc27803, metalness: 0.85, roughness: 0.2 });
         const tube = new THREE.Mesh(tubeCurve, tubeMat);
-        tube.position.set(0, hwY, zBase + 0.16);
+        tube.position.set(0, hwY - 0.02, zBase + 0.14);
         group.add(tube);
 
         group.add(knob);
@@ -3575,24 +4122,22 @@ export class TrainerScene3D {
         visuals.actuatorMesh = knob;
       } else if (comp.type === 'pressure_switch_dual') {
         // Dual Pressure Switch (Low / High Cutout) with LED status
-        const bodyGeo = new THREE.BoxGeometry(1.2, 0.82, 0.34);
+        const bodyGeo = new THREE.BoxGeometry(1.1, 0.66, 0.30);
         const bodyMat = new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.5, roughness: 0.35 });
         const body = new THREE.Mesh(bodyGeo, bodyMat);
-        body.position.set(0, hwY, zBase + 0.18);
-        this._addInkedOutline(body);
+        body.position.set(0, hwY - 0.02, zBase + 0.16);
         group.add(body);
 
-        for (const px of [-0.36, 0.36]) {
-          const portGeo = new THREE.CylinderGeometry(0.12, 0.14, 0.22, 14);
+        for (const px of [-0.32, 0.32]) {
+          const portGeo = new THREE.CylinderGeometry(0.095, 0.11, 0.18, 14);
           portGeo.rotateX(Math.PI / 2);
           const portMat = new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.8, roughness: 0.25 });
           const port = new THREE.Mesh(portGeo, portMat);
-          port.position.set(px, hwY - 0.28, zBase + 0.18);
-          this._addInkedOutline(port);
+          port.position.set(px, hwY - 0.22, zBase + 0.16);
           group.add(port);
         }
 
-        const ledGeo = new THREE.SphereGeometry(0.1, 14, 14);
+        const ledGeo = new THREE.SphereGeometry(0.085, 14, 14);
         const ledMat = new THREE.MeshStandardMaterial({
           color: 0x22c55e,
           emissive: 0x22c55e,
@@ -3600,49 +4145,47 @@ export class TrainerScene3D {
           roughness: 0.2,
         });
         const led = new THREE.Mesh(ledGeo, ledMat);
-        led.position.set(0, hwY + 0.18, zBase + 0.36);
+        led.position.set(0, hwY + 0.12, zBase + 0.32);
         group.add(led);
         visuals.statusLed = led;
         visuals.actuatorMesh = body;
         body.userData = { interactComponentId: comp.id };
         this.interactiveTargets.push(body);
       } else if (comp.type === 'resistor_blower') {
-        // Stepped Ceramic Wirewound Blower Resistor Unit
-        const cageGeo = new THREE.BoxGeometry(1.4, 0.86, 0.32);
+        // Stepped Ceramic Wirewound Blower Resistor Unit (strictly inside Zone 2)
+        const cageGeo = new THREE.BoxGeometry(1.5, 0.68, 0.28);
         const cageMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.7, roughness: 0.3 });
         const cage = new THREE.Mesh(cageGeo, cageMat);
-        cage.position.set(0, hwY, zBase + 0.17);
-        this._addInkedOutline(cage);
+        cage.position.set(0, hwY - 0.02, zBase + 0.15);
         group.add(cage);
 
         const wireMat = new THREE.MeshStandardMaterial({ color: 0x78350f, metalness: 0.75, roughness: 0.3 });
         for (let i = 0; i < 3; i++) {
-          const cx = -0.42 + i * 0.42;
-          const coilGeo = new THREE.CylinderGeometry(0.1, 0.1, 0.58, 12);
+          const cx = -0.44 + i * 0.44;
+          const coilGeo = new THREE.CylinderGeometry(0.085, 0.085, 0.48, 12);
           const coil = new THREE.Mesh(coilGeo, wireMat);
-          coil.position.set(cx, hwY, zBase + 0.24);
-          this._addInkedOutline(coil);
+          coil.position.set(cx, hwY - 0.02, zBase + 0.22);
           group.add(coil);
         }
 
         const slotMat = new THREE.MeshBasicMaterial({ color: 0x0f172a });
         for (let r = -2; r <= 2; r++) {
-          const s = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.04), slotMat);
-          s.position.set(0, hwY + r * 0.12, zBase + 0.34);
+          const s = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 0.032), slotMat);
+          s.position.set(0, hwY - 0.02 + r * 0.10, zBase + 0.30);
           group.add(s);
         }
       } else if (comp.type === 'evaporator_unit') {
-        // Under-Dash Evaporator & Blower Housing
-        const bodyW = Math.min(w * 0.92, 5.2);
-        const bodyH = 1.35;
+        // Under-Dash Evaporator & Blower Housing (strictly inside Zone 2 above schematic & pins)
+        const bodyW = Math.min(w * 0.86, 5.4);
+        const bodyH = Math.min(h * 0.40, 0.94);
         const housingMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.55 });
         const housing = this._createRoundedBoxMesh(
           bodyW,
           bodyH,
-          0.45,
-          0.08,
+          0.38,
+          0.07,
           housingMat,
-          [0, hwY + 0.1, zBase + 0.24]
+          [0, hwY - 0.02, zBase + 0.20]
         );
         housing.castShadow = true;
         group.add(housing);
@@ -3653,20 +4196,19 @@ export class TrainerScene3D {
 
         for (let i = 0; i < 4; i++) {
           const vx = -bodyW / 2 + 0.45 + i * (ventW + 0.08);
-          const ventY = hwY + 0.12;
-          const ventZ = zBase + 0.52;
+          const ventY = hwY - 0.02;
+          const ventZ = zBase + 0.42;
 
           const ventFrame = new THREE.Mesh(
-            new THREE.BoxGeometry(ventW, 0.72, 0.08),
+            new THREE.BoxGeometry(ventW, bodyH * 0.62, 0.07),
             new THREE.MeshStandardMaterial({ color: 0x09090b, roughness: 0.7 })
           );
-          ventFrame.position.set(vx, ventY, zBase + 0.48);
-          this._addInkedOutline(ventFrame);
+          ventFrame.position.set(vx, ventY, zBase + 0.40);
           group.add(ventFrame);
 
           for (let b = -2; b <= 2; b++) {
-            const blade = new THREE.Mesh(new THREE.BoxGeometry(ventW * 0.92, 0.035, 0.12), louverMat);
-            blade.position.set(vx, ventY + b * 0.11, zBase + 0.5);
+            const blade = new THREE.Mesh(new THREE.BoxGeometry(ventW * 0.92, 0.03, 0.10), louverMat);
+            blade.position.set(vx, ventY + b * 0.09, zBase + 0.42);
             blade.rotation.x = 0.22;
             group.add(blade);
           }
@@ -3700,21 +4242,19 @@ export class TrainerScene3D {
           }
         }
       } else if (comp.type === 'magnetic_clutch') {
-        // Component-board Magnetic Clutch representation
-        const pulleyGeo = new THREE.CylinderGeometry(0.68, 0.68, 0.28, 28);
+        // Component-board Magnetic Clutch representation (scaled cleanly inside Zone 2)
+        const pulleyGeo = new THREE.CylinderGeometry(0.46, 0.46, 0.22, 28);
         pulleyGeo.rotateX(Math.PI / 2);
         const pulleyMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.75, roughness: 0.25 });
         const pulley = new THREE.Mesh(pulleyGeo, pulleyMat);
-        pulley.position.set(0, hwY, zBase + 0.15);
-        this._addInkedOutline(pulley);
+        pulley.position.set(0, hwY - 0.02, zBase + 0.13);
         group.add(pulley);
 
-        const discGeo = new THREE.CylinderGeometry(0.52, 0.52, 0.08, 24);
+        const discGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.07, 24);
         discGeo.rotateX(Math.PI / 2);
         const discMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.85, roughness: 0.2 });
         const disc = new THREE.Mesh(discGeo, discMat);
-        disc.position.set(0, hwY, zBase + 0.31);
-        this._addInkedOutline(disc);
+        disc.position.set(0, hwY - 0.02, zBase + 0.26);
         group.add(disc);
         visuals.clutchDisc = disc;
         visuals.isClutch = true;
@@ -3722,34 +4262,32 @@ export class TrainerScene3D {
         for (let a = 0; a < 3; a++) {
           const ang = (a * Math.PI * 2) / 3;
           const spring = new THREE.Mesh(
-            new THREE.BoxGeometry(0.28, 0.05, 0.03),
+            new THREE.BoxGeometry(0.20, 0.04, 0.025),
             new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.8 })
           );
-          spring.position.set(Math.cos(ang) * 0.26, hwY + Math.sin(ang) * 0.26, zBase + 0.36);
+          spring.position.set(Math.cos(ang) * 0.18, hwY - 0.02 + Math.sin(ang) * 0.18, zBase + 0.30);
           spring.rotation.z = ang;
           group.add(spring);
         }
       } else if (comp.type === 'condenser_fan') {
-        // Condenser Radiator Matrix + Extra Fan
-        const radGeo = new THREE.BoxGeometry(1.6, 1.2, 0.18);
+        // Condenser Radiator Matrix + Extra Fan (scaled cleanly inside Zone 2)
+        const radGeo = new THREE.BoxGeometry(1.32, 0.88, 0.16);
         const radMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.75, roughness: 0.28 });
         const rad = new THREE.Mesh(radGeo, radMat);
-        rad.position.set(0, hwY, zBase + 0.1);
-        this._addInkedOutline(rad);
+        rad.position.set(0, hwY - 0.02, zBase + 0.09);
         group.add(rad);
 
-        const shroudGeo = new THREE.CylinderGeometry(0.55, 0.58, 0.16, 24);
+        const shroudGeo = new THREE.CylinderGeometry(0.38, 0.40, 0.14, 24);
         shroudGeo.rotateX(Math.PI / 2);
         const shroudMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.6 });
         const shroud = new THREE.Mesh(shroudGeo, shroudMat);
-        shroud.position.set(0, hwY, zBase + 0.2);
-        this._addInkedOutline(shroud);
+        shroud.position.set(0, hwY - 0.02, zBase + 0.18);
         group.add(shroud);
 
         const fanGroup = new THREE.Group();
-        fanGroup.position.set(0, hwY, zBase + 0.28);
+        fanGroup.position.set(0, hwY - 0.02, zBase + 0.25);
         const hub = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.14, 0.14, 0.1, 16).rotateX(Math.PI / 2),
+          new THREE.CylinderGeometry(0.11, 0.11, 0.08, 16).rotateX(Math.PI / 2),
           shroudMat
         );
         fanGroup.add(hub);
@@ -3757,8 +4295,8 @@ export class TrainerScene3D {
         const bladeMat = new THREE.MeshStandardMaterial({ color: 0x27272a, roughness: 0.4 });
         for (let b = 0; b < 5; b++) {
           const ang = (b * Math.PI * 2) / 5;
-          const blade = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.12, 0.02), bladeMat);
-          blade.position.set(Math.cos(ang) * 0.28, Math.sin(ang) * 0.28, 0);
+          const blade = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.09, 0.02), bladeMat);
+          blade.position.set(Math.cos(ang) * 0.20, Math.sin(ang) * 0.20, 0);
           blade.rotation.z = ang + 0.35;
           fanGroup.add(blade);
         }
@@ -3766,114 +4304,110 @@ export class TrainerScene3D {
         visuals.fanBlades = fanGroup;
         visuals.isFan = true;
       } else if (comp.type === 'manifold_gauge_unit') {
-        // Dual Manifold Gauge Cluster (Low Blue & High Red) with needle meshes
-        const manifoldGeo = new THREE.BoxGeometry(1.6, 0.32, 0.22);
+        // Dual Manifold Gauge Cluster (Low Blue & High Red) cleanly inside Zone 2
+        const manifoldGeo = new THREE.BoxGeometry(1.36, 0.24, 0.20);
         const brassMat = new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.82, roughness: 0.25 });
         const manifold = new THREE.Mesh(manifoldGeo, brassMat);
-        manifold.position.set(0, hwY - 0.32, zBase + 0.12);
-        this._addInkedOutline(manifold);
+        manifold.position.set(0, hwY - 0.28, zBase + 0.11);
         group.add(manifold);
 
         const lowGaugeGroup = new THREE.Group();
-        lowGaugeGroup.position.set(-0.68, hwY + 0.18, zBase + 0.16);
+        lowGaugeGroup.position.set(-0.56, hwY + 0.10, zBase + 0.14);
         const lowCup = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.54, 0.54, 0.18, 28).rotateX(Math.PI / 2),
+          new THREE.CylinderGeometry(0.38, 0.38, 0.16, 28).rotateX(Math.PI / 2),
           new THREE.MeshStandardMaterial({ color: 0x1d4ed8, metalness: 0.6, roughness: 0.3 })
         );
-        this._addInkedOutline(lowCup);
         lowGaugeGroup.add(lowCup);
 
         const lowDialTex = this._getGaugeDialTexture(false);
         const lowDial = new THREE.Mesh(
-          new THREE.CircleGeometry(0.48, 28),
+          new THREE.CircleGeometry(0.34, 28),
           new THREE.MeshBasicMaterial({ map: lowDialTex })
         );
-        lowDial.position.z = 0.1;
+        lowDial.position.z = 0.09;
         lowGaugeGroup.add(lowDial);
 
         const needleMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
-        const lowNeedleGeo = new THREE.BoxGeometry(0.032, 0.36, 0.02);
-        lowNeedleGeo.translate(0, 0.16, 0);
+        const lowNeedleGeo = new THREE.BoxGeometry(0.025, 0.25, 0.02);
+        lowNeedleGeo.translate(0, 0.11, 0);
         const lowNeedle = new THREE.Mesh(lowNeedleGeo, needleMat);
-        lowNeedle.position.z = 0.12;
+        lowNeedle.position.z = 0.11;
         lowGaugeGroup.add(lowNeedle);
         group.add(lowGaugeGroup);
         visuals.lowNeedle = lowNeedle;
 
         const highGaugeGroup = new THREE.Group();
-        highGaugeGroup.position.set(0.68, hwY + 0.18, zBase + 0.16);
+        highGaugeGroup.position.set(0.56, hwY + 0.10, zBase + 0.14);
         const highCup = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.54, 0.54, 0.18, 28).rotateX(Math.PI / 2),
+          new THREE.CylinderGeometry(0.38, 0.38, 0.16, 28).rotateX(Math.PI / 2),
           new THREE.MeshStandardMaterial({ color: 0xb91c1c, metalness: 0.6, roughness: 0.3 })
         );
-        this._addInkedOutline(highCup);
         highGaugeGroup.add(highCup);
 
         const highDialTex = this._getGaugeDialTexture(true);
         const highDial = new THREE.Mesh(
-          new THREE.CircleGeometry(0.48, 28),
+          new THREE.CircleGeometry(0.34, 28),
           new THREE.MeshBasicMaterial({ map: highDialTex })
         );
-        highDial.position.z = 0.1;
+        highDial.position.z = 0.09;
         highGaugeGroup.add(highDial);
 
-        const highNeedleGeo = new THREE.BoxGeometry(0.032, 0.36, 0.02);
-        highNeedleGeo.translate(0, 0.16, 0);
+        const highNeedleGeo = new THREE.BoxGeometry(0.025, 0.25, 0.02);
+        highNeedleGeo.translate(0, 0.11, 0);
         const highNeedle = new THREE.Mesh(highNeedleGeo, needleMat);
-        highNeedle.position.z = 0.12;
+        highNeedle.position.z = 0.11;
         highGaugeGroup.add(highNeedle);
         group.add(highGaugeGroup);
         visuals.highNeedle = highNeedle;
 
-        const sgGeo = new THREE.CylinderGeometry(0.14, 0.14, 0.1, 18).rotateX(Math.PI / 2);
+        const sgGeo = new THREE.CylinderGeometry(0.10, 0.10, 0.08, 18).rotateX(Math.PI / 2);
         const sgMat = new THREE.MeshStandardMaterial({
           color: 0x38bdf8,
           transparent: true,
-          opacity: 0.75,
+          opacity: 0.78,
           roughness: 0.15,
           metalness: 0.1,
         });
         const sg = new THREE.Mesh(sgGeo, sgMat);
-        sg.position.set(0, hwY - 0.32, zBase + 0.24);
+        sg.position.set(0, hwY - 0.28, zBase + 0.21);
         group.add(sg);
         visuals.sightGlassMesh = sg;
       } else if (comp.type === 'digital_temp_unit') {
-        // Digital Temperature Display Box (T1 Ambient, T2 Evap Inlet, T3 Vent Discharge)
-        const boxGeo = new THREE.BoxGeometry(Math.min(w * 0.9, 3.2), 1.25, 0.25);
+        // Digital Temperature Display Box (T1 Ambient, T2 Evap Inlet, T3 Vent Discharge) — Zone 2 scaled
+        const boxW = Math.min(w * 0.86, 3.6);
+        const boxH = Math.min(h * 0.40, 0.94);
+        const boxGeo = new THREE.BoxGeometry(boxW, boxH, 0.22);
         const boxMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.45 });
         const box = new THREE.Mesh(boxGeo, boxMat);
-        box.position.set(0, hwY, zBase + 0.13);
-        this._addInkedOutline(box);
+        box.position.set(0, hwY - 0.02, zBase + 0.12);
         group.add(box);
 
         const tempTex = this._getDigitalTempTexture('31.5', '28.0', '7.5');
-        const tempScreenGeo = new THREE.PlaneGeometry(Math.min(w * 0.86, 3.0), 1.08);
+        const tempScreenGeo = new THREE.PlaneGeometry(boxW * 0.94, boxH * 0.86);
         const tempScreenMat = new THREE.MeshBasicMaterial({ map: tempTex });
         const tempScreen = new THREE.Mesh(tempScreenGeo, tempScreenMat);
-        tempScreen.position.set(0, hwY, zBase + 0.26);
+        tempScreen.position.set(0, hwY - 0.02, zBase + 0.24);
         group.add(tempScreen);
         visuals.digitalTempScreen = tempScreen;
       } else if (comp.type === 'motor_ac_drive') {
         // Engine Drive Motor Control Panel with RPM selector (800, 1500, 2200 RPM)
-        const panelGeo = new THREE.BoxGeometry(1.6, 1.0, 0.22);
+        const panelGeo = new THREE.BoxGeometry(1.75, 0.86, 0.20);
         const panelMat = new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.4 });
         const panel = new THREE.Mesh(panelGeo, panelMat);
-        panel.position.set(0, hwY, zBase + 0.11);
-        this._addInkedOutline(panel);
+        panel.position.set(0, hwY - 0.02, zBase + 0.10);
         group.add(panel);
 
-        const knobGeo = new THREE.CylinderGeometry(0.3, 0.34, 0.24, 20).rotateX(Math.PI / 2);
+        const knobGeo = new THREE.CylinderGeometry(0.26, 0.30, 0.22, 20).rotateX(Math.PI / 2);
         const knobMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.35 });
         const knob = new THREE.Mesh(knobGeo, knobMat);
-        knob.position.set(0, hwY, zBase + 0.24);
-        knob.userData = { interactComponentId: comp.id, baseZ: zBase + 0.24 };
-        this._addInkedOutline(knob);
+        knob.position.set(0, hwY - 0.02, zBase + 0.22);
+        knob.userData = { interactComponentId: comp.id, baseZ: zBase + 0.22 };
 
         const mark = new THREE.Mesh(
-          new THREE.BoxGeometry(0.05, 0.18, 0.06),
+          new THREE.BoxGeometry(0.045, 0.16, 0.06),
           new THREE.MeshBasicMaterial({ color: 0xfacc15 })
         );
-        mark.position.set(0, 0.1, 0.1);
+        mark.position.set(0, 0.09, 0.09);
         knob.add(mark);
 
         group.add(knob);
@@ -3890,6 +4424,9 @@ export class TrainerScene3D {
     const group = new THREE.Group();
     const [x, y, z] = pin.pos;
     group.position.set(x, y, z);
+    if (pin.tiltX) {
+      group.rotation.x = pin.tiltX;
+    }
 
     const isBatteryPost = pin.terminalType === 'battery_post';
     const collarColorKey = pin.color || 'red';
@@ -3988,8 +4525,9 @@ export class TrainerScene3D {
       const yOffset = 0.32 + stackIndex * 0.22;
       plugGroup.position.set(px, py + yOffset, pz);
       const jawGeo = new THREE.BoxGeometry(0.34, 0.28, 0.44);
-      const jawMat = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.45 });
+      const jawMat = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.36, metalness: 0.08 });
       const jaw = new THREE.Mesh(jawGeo, jawMat);
+      jaw.castShadow = true;
       jaw.userData = { pinId: pin.id, pinData: pin, cableId };
       plugGroup.add(jaw);
       this.interactiveTargets.push(jaw);
@@ -3997,22 +4535,33 @@ export class TrainerScene3D {
       return {
         mesh: plugGroup,
         tipWorldPos: new THREE.Vector3(px, py + yOffset + 0.14, pz + 0.12),
+        normal: new THREE.Vector3(0.0, 0.78, 0.62).normalize(),
       };
     }
 
-    const zOffset = 0.22 + explodeOffsetZ + stackIndex * PLUG_STACK_STEP;
-    plugGroup.position.set(px, py, pz + zOffset);
+    const tiltX = pin.tiltX || 0;
+    const normal = new THREE.Vector3(0, -Math.sin(tiltX), Math.cos(tiltX)).normalize();
+    const distOut = 0.22 + explodeOffsetZ + stackIndex * PLUG_STACK_STEP;
+    plugGroup.position.set(
+      px + normal.x * distOut,
+      py + normal.y * distOut,
+      pz + normal.z * distOut
+    );
+    if (tiltX) {
+      plugGroup.rotation.x = tiltX;
+    }
 
-    const bodyGeo = new THREE.CylinderGeometry(0.082, 0.096, 0.18, 14);
+    const bodyGeo = new THREE.CylinderGeometry(0.084, 0.098, 0.19, 14);
     bodyGeo.rotateX(Math.PI / 2);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.4 });
+    const bodyMat = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.34, metalness: 0.06 });
     const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.castShadow = true;
     body.userData = { pinId: pin.id, pinData: pin, cableId };
     plugGroup.add(body);
 
-    const tipGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.2, 10);
+    const tipGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.21, 10);
     tipGeo.rotateX(Math.PI / 2);
-    const tipMat = new THREE.MeshStandardMaterial({ color: 0xeab308, metalness: 0.75, roughness: 0.25 });
+    const tipMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.85, roughness: 0.2 });
     const tip = new THREE.Mesh(tipGeo, tipMat);
     tip.userData = { pinId: pin.id, pinData: pin, cableId };
     plugGroup.add(tip);
@@ -4021,7 +4570,12 @@ export class TrainerScene3D {
 
     return {
       mesh: plugGroup,
-      tipWorldPos: new THREE.Vector3(px, py, pz + zOffset + 0.08),
+      tipWorldPos: new THREE.Vector3(
+        px + normal.x * (distOut + 0.085),
+        py + normal.y * (distOut + 0.085),
+        pz + normal.z * (distOut + 0.085)
+      ),
+      normal,
     };
   }
 
@@ -4310,7 +4864,17 @@ export class TrainerScene3D {
         ? Math.max(deskY, clampedY)
         : clampedY;
 
-      points.push(new THREE.Vector3(finalX, safeY, finalZ));
+      // E. Physical Board & Angled Console Surface Clearance (prevents cables from sinking behind the board or clipping through the sloped console)
+      let safeZ = Math.max(finalZ, 0.56);
+      const cfg = this.module?.hasAngledConsole ? this.module.consoleConfig : null;
+      if (cfg && safeY < cfg.hingeY + 0.15) {
+        // Sloped plane z(y) = hingeZ + (hingeY - y) * tan(|tiltX|)
+        const tanTilt = Math.tan(Math.abs(cfg.tiltX));
+        const consoleSurfaceZ = cfg.hingeZ + Math.max(0, cfg.hingeY - safeY) * tanTilt;
+        safeZ = Math.max(safeZ, consoleSurfaceZ + 0.14);
+      }
+
+      points.push(new THREE.Vector3(finalX, safeY, safeZ));
     }
 
     return new THREE.CatmullRomCurve3(points, false, 'centripetal', 0.5);
@@ -4367,18 +4931,23 @@ export class TrainerScene3D {
         plugA.tipWorldPos,
         plugB.tipWorldPos,
         cable.maxLengthCm,
-        cable.distanceCm
+        cable.distanceCm,
+        {
+          startNormal: plugA.normal,
+          endNormal: plugB.normal,
+        }
       );
-      // Slim, realistic jumper wire thickness so even 30+ wires never obscure the board
-      const tubeRadius = cable.category === 'alligator' ? 0.056 : 0.034;
-      const tubeGeo = new THREE.TubeGeometry(curve, 24, tubeRadius, 6, false);
+      // Realistic slim flexible PVC automotive jumper wire (prevents heavy visual stacking!)
+      const tubeRadius = cable.category === 'alligator' ? 0.040 : 0.024;
+      const tubeGeo = new THREE.TubeGeometry(curve, 28, tubeRadius, 8, false);
       const tubeMat = new THREE.MeshStandardMaterial({
         color: WIRE_COLOR_HEX[cable.color] || 0xd93829,
-        roughness: 0.45,
-        metalness: 0.08,
+        roughness: 0.34,
+        metalness: 0.05,
       });
       const tubeMesh = new THREE.Mesh(tubeGeo, tubeMat);
-      tubeMesh.castShadow = false;
+      tubeMesh.castShadow = true;
+      tubeMesh.receiveShadow = true;
       tubeMesh.userData = { cableId: cable.id, isCablePart: true };
       cableGroup.add(tubeMesh);
       this.interactiveTargets.push(tubeMesh);
@@ -4489,7 +5058,7 @@ export class TrainerScene3D {
     const maxLen = Math.max(120, dist + 40);
 
     const curve = this._buildCatenaryCurve(cableStart, cableEnd, maxLen, dist);
-    const tubeGeo = new THREE.TubeGeometry(curve, 24, 0.038, 8, false);
+    const tubeGeo = new THREE.TubeGeometry(curve, 24, 0.026, 8, false);
     const tubeMat = new THREE.MeshStandardMaterial({
       color: color === 'red' ? 0xd93829 : 0x18181b,
       roughness: 0.5,
@@ -4507,16 +5076,30 @@ export class TrainerScene3D {
     if (!startPin) return;
 
     const explodeZ = this.explodeProgress * 1.45;
-    const startZ = startPin.pos[2] + (startPin.terminalType === 'battery_post' ? 0.35 : 0.25 + explodeZ);
-    const startVec = new THREE.Vector3(startPin.pos[0], startPin.pos[1], startZ);
+    const getPinTip = (pin) => {
+      if (pin.terminalType === 'battery_post') {
+        return {
+          pos: new THREE.Vector3(pin.pos[0], pin.pos[1] + 0.35, pin.pos[2] + 0.12),
+          normal: new THREE.Vector3(0.0, 0.78, 0.62).normalize(),
+        };
+      }
+      const tiltX = pin.tiltX || 0;
+      const normal = new THREE.Vector3(0, -Math.sin(tiltX), Math.cos(tiltX)).normalize();
+      const out = 0.28 + explodeZ;
+      return {
+        pos: new THREE.Vector3(
+          pin.pos[0] + normal.x * out,
+          pin.pos[1] + normal.y * out,
+          pin.pos[2] + normal.z * out
+        ),
+        normal,
+      };
+    };
 
-    const endVec = targetPin
-      ? new THREE.Vector3(
-          targetPin.pos[0],
-          targetPin.pos[1],
-          targetPin.pos[2] + (targetPin.terminalType === 'battery_post' ? 0.35 : 0.25 + explodeZ)
-        )
-      : targetPoint3D;
+    const startTip = getPinTip(startPin);
+    const endTip = targetPin ? getPinTip(targetPin) : null;
+    const startVec = startTip.pos;
+    const endVec = endTip ? endTip.pos : targetPoint3D;
 
     if (!endVec) return;
 
@@ -4539,10 +5122,14 @@ export class TrainerScene3D {
       startVec,
       endVec,
       validation.maxLengthCm || 25,
-      validation.distanceCm || 15
+      validation.distanceCm || 15,
+      {
+        startNormal: startTip.normal,
+        endNormal: endTip ? endTip.normal : undefined,
+      }
     );
 
-    const previewGeo = new THREE.TubeGeometry(curve, 22, 0.032, 8, false);
+    const previewGeo = new THREE.TubeGeometry(curve, 24, 0.024, 8, false);
     const previewMat = new THREE.MeshBasicMaterial({
       color: isValid ? (color === 'black' ? 0x334155 : 0x16a34a) : 0xdc2626,
       transparent: true,
@@ -4672,18 +5259,64 @@ export class TrainerScene3D {
       if (vis.headlampFlares) {
         const isLow = Boolean(state.lowBeam);
         const isHigh = Boolean(state.highBeam);
+        const isDimGarage = this.environmentPreset === 'bengkel_mobil';
+        const envBoost = isDimGarage ? 1.25 : 1.0;
+
         for (const f of vis.headlampFlares) {
+          const sx = f.baseScaleX || 1.8;
+          const sy = f.baseScaleY || 1.3;
           if (isHigh) {
-            f.mesh.material.color.setHex(0xf97316);
-            f.mesh.material.opacity = 0.88;
-            f.mesh.scale.set(1.38, 1.15, 1);
+            f.mesh.material.color.setHex(0xfffbeb);
+            f.mesh.material.opacity = Math.min(1.0, 0.92 * envBoost);
+            f.mesh.scale.set(sx * 1.42, sy * 1.38, 1);
+            f.mesh.position.y = 0.0;
+            if (f.beamCone) {
+              f.beamCone.material.color.setHex(0xfffbeb);
+              f.beamCone.material.opacity = Math.min(0.62, 0.44 * envBoost);
+              f.beamCone.scale.set(1.22, 1.18, 1.35);
+              f.beamCone.rotation.x = -0.02;
+            }
           } else if (isLow) {
-            f.mesh.material.color.setHex(0xf59e0b);
-            f.mesh.material.opacity = 0.72;
-            f.mesh.scale.set(0.95, 0.85, 1);
+            f.mesh.material.color.setHex(0xfde68a);
+            f.mesh.material.opacity = Math.min(0.95, 0.68 * envBoost);
+            f.mesh.scale.set(sx * 1.02, sy * 0.94, 1);
+            f.mesh.position.y = -0.05;
+            if (f.beamCone) {
+              f.beamCone.material.color.setHex(0xfde68a);
+              f.beamCone.material.opacity = Math.min(0.45, 0.28 * envBoost);
+              f.beamCone.scale.set(0.96, 0.78, 0.82);
+              f.beamCone.rotation.x = 0.16; // Realistic downward low-beam dip
+            }
           } else {
             f.mesh.material.opacity = 0;
+            if (f.beamCone) f.beamCone.material.opacity = 0;
           }
+        }
+      }
+
+      if (vis.glowSprites && vis.glowSprites.length > 0) {
+        const isDimGarage = this.environmentPreset === 'bengkel_mobil';
+        const envBoost = isDimGarage ? 1.22 : 1.0;
+        for (const g of vis.glowSprites) {
+          let lit = Boolean(state.energized);
+          if (state.lowBeam !== undefined || state.highBeam !== undefined) {
+            if (g.index === 0) lit = Boolean(state.lowBeam || state.highBeam);
+            else if (g.index === 1) lit = Boolean(state.highBeam);
+          } else if (
+            state.signOn !== undefined ||
+            state.tailOn !== undefined ||
+            state.stopOn !== undefined ||
+            state.revOn !== undefined
+          ) {
+            if (g.index === 0) lit = Boolean(state.signOn);
+            else if (g.index === 1) lit = Boolean(state.tailOn);
+            else if (g.index === 2) lit = Boolean(state.stopOn);
+            else if (g.index === 3) lit = Boolean(state.revOn);
+            else lit = false;
+          } else if (state.lhOn !== undefined || state.rhOn !== undefined) {
+            lit = Boolean(state.rhOn);
+          }
+          g.sprite.material.opacity = lit ? Math.min(1.0, (g.maxOpacity || 0.75) * envBoost) : 0;
         }
       }
 
@@ -4697,20 +5330,24 @@ export class TrainerScene3D {
           const isHigh = Boolean(state.highBeam);
           if (isHigh) {
             lit = true;
-            activeHex = item.index === 0 ? 0xfef08a : 0xfacc15;
-            intensity = 1.65;
+            activeHex = item.index === 0 ? 0xfef08a : 0xfffbeb;
+            intensity = 1.75;
           } else if (isLow) {
             lit = item.index === 0;
-            activeHex = 0xfacc15;
+            activeHex = 0xfde68a;
             intensity = 1.45;
           } else {
             lit = false;
           }
         } else if (state.signOn !== undefined || state.tailOn !== undefined || state.stopOn !== undefined || state.revOn !== undefined) {
           if (item.index === 0) lit = Boolean(state.signOn);
-          else if (item.index === 1) lit = Boolean(state.tailOn);
-          else if (item.index === 2) lit = Boolean(state.stopOn);
-          else if (item.index === 3) lit = Boolean(state.revOn);
+          else if (item.index === 1) {
+            lit = Boolean(state.tailOn);
+            intensity = 0.85; // 5W tail lamp gentler than 21W stop lamp
+          } else if (item.index === 2) {
+            lit = Boolean(state.stopOn);
+            intensity = 1.65; // 21W brake/stop lamp visibly brighter
+          } else if (item.index === 3) lit = Boolean(state.revOn);
           else lit = false;
         } else if (state.lhOn !== undefined || state.rhOn !== undefined) {
           lit = Boolean(state.rhOn);
@@ -4734,6 +5371,9 @@ export class TrainerScene3D {
         this.auxVisuals.licenceLens.material.color.setHex(licenceLit ? 0xfef08a : 0xcbd5e1);
         this.auxVisuals.licenceLens.material.emissive.setHex(licenceLit ? 0xfef08a : 0x000000);
         this.auxVisuals.licenceLens.material.emissiveIntensity = licenceLit ? 1.15 : 0;
+        if (this.auxVisuals.licenceGlow) {
+          this.auxVisuals.licenceGlow.material.opacity = licenceLit ? 0.68 : 0;
+        }
       }
       if (this.auxVisuals.pilotRed) {
         const tailOrIgnOn = Boolean(
@@ -4745,6 +5385,9 @@ export class TrainerScene3D {
         m.color.setHex(tailOrIgnOn ? 0x22c55e : 0x14532d);
         m.emissive.setHex(tailOrIgnOn ? 0x22c55e : 0x000000);
         m.emissiveIntensity = tailOrIgnOn ? 1.25 : 0;
+        if (this.auxVisuals.pilotRedGlow) {
+          this.auxVisuals.pilotRedGlow.material.opacity = tailOrIgnOn ? 0.72 : 0;
+        }
       }
       if (this.auxVisuals.pilotAmber) {
         const turnOn = Boolean(
@@ -4757,6 +5400,9 @@ export class TrainerScene3D {
         m.color.setHex(turnOn ? 0xf59e0b : 0x78350f);
         m.emissive.setHex(turnOn ? 0xf59e0b : 0x000000);
         m.emissiveIntensity = turnOn ? 1.3 : 0;
+        if (this.auxVisuals.pilotAmberGlow) {
+          this.auxVisuals.pilotAmberGlow.material.opacity = turnOn ? 0.78 : 0;
+        }
       }
       if (this.auxVisuals.pilotBlue) {
         const hiOn = Boolean(
@@ -4766,6 +5412,9 @@ export class TrainerScene3D {
         m.color.setHex(hiOn ? 0x3b82f6 : 0x1e3a8a);
         m.emissive.setHex(hiOn ? 0x3b82f6 : 0x000000);
         m.emissiveIntensity = hiOn ? 1.35 : 0;
+        if (this.auxVisuals.pilotBlueGlow) {
+          this.auxVisuals.pilotBlueGlow.material.opacity = hiOn ? 0.80 : 0;
+        }
       }
     }
 
@@ -4807,7 +5456,7 @@ export class TrainerScene3D {
       }
 
       if (this.acClutchPlate) {
-        this.acClutchPlate.position.x = this.acIsClutchEngaged ? 1.18 : 1.24;
+        this.acClutchPlate.position.z = this.acIsClutchEngaged ? 1.00 : 1.06;
       }
     }
 
@@ -5030,7 +5679,7 @@ export class TrainerScene3D {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
   }
 
   renderFrame(deltaSeconds = 0.016) {
@@ -5045,18 +5694,33 @@ export class TrainerScene3D {
       this.controls.target.y = FLOOR_Y + 1.2;
     }
 
-    // Smooth exploded view interpolation
+    // Smooth exploded view interpolation (respects angled console surface normals!)
     const targetExplode = this.explodedView ? 1 : 0;
     this.explodeProgress += (targetExplode - this.explodeProgress) * Math.min(1, deltaSeconds * 9);
 
     for (const [, group] of this.componentGroups.entries()) {
       if (group.userData.type === 'battery_12v') continue;
-      group.position.z = group.userData.baseZ + this.explodeProgress * 1.45;
+      const tiltX = group.userData.tiltX || 0;
+      const lift = this.explodeProgress * 1.45;
+      if (tiltX) {
+        group.position.y = group.userData.baseY - Math.sin(tiltX) * lift;
+        group.position.z = group.userData.baseZ + Math.cos(tiltX) * lift;
+      } else {
+        group.position.z = group.userData.baseZ + lift;
+      }
     }
 
     for (const [, pinGroup] of this.pinMeshes.entries()) {
-      if (pinGroup.userData.pinData?.terminalType === 'battery_post') continue;
-      pinGroup.position.z = pinGroup.userData.pinData.pos[2] + this.explodeProgress * 1.45;
+      const pData = pinGroup.userData.pinData;
+      if (pData?.terminalType === 'battery_post') continue;
+      const tiltX = pData?.tiltX || 0;
+      const lift = this.explodeProgress * 1.45;
+      if (tiltX) {
+        pinGroup.position.y = pData.pos[1] - Math.sin(tiltX) * lift;
+        pinGroup.position.z = pData.pos[2] + Math.cos(tiltX) * lift;
+      } else {
+        pinGroup.position.z = pData.pos[2] + lift;
+      }
     }
 
     // Rebuild cable curves when explodeProgress transitions so cables route underneath lifted components
@@ -5126,13 +5790,13 @@ export class TrainerScene3D {
       }
     }
 
-    // AC Mechanical Drive Animations (lower shelf motor & compressor)
+    // AC Mechanical Drive Animations (lower shelf motor & compressor pulleys facing +Z)
     if (this.acCompressorRpm > 0 && this.acMotorPulley) {
       const rotSpeed = deltaSeconds * (this.acCompressorRpm * 0.012);
-      this.acMotorPulley.rotation.x += rotSpeed;
-      if (this.acIsClutchEngaged) {
-        if (this.acCompressorPulley) this.acCompressorPulley.rotation.x += rotSpeed;
-        if (this.acClutchPlate) this.acClutchPlate.rotation.x += rotSpeed;
+      this.acMotorPulley.rotation.z -= rotSpeed;
+      if (this.acCompressorPulley) this.acCompressorPulley.rotation.z -= rotSpeed;
+      if (this.acIsClutchEngaged && this.acClutchPlate) {
+        this.acClutchPlate.rotation.z -= rotSpeed;
       }
     }
 

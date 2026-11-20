@@ -17,9 +17,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    socketserver.TCPServer.allow_reuse_address = True
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
     try:
-        with socketserver.TCPServer(("127.0.0.1", PORT), Handler) as httpd:
+        with socketserver.ThreadingTCPServer(("127.0.0.1", PORT), Handler) as httpd:
             print(f"Automotive Bench 3D Server aktif di http://127.0.0.1:{PORT}/index.html")
             httpd.serve_forever()
     except OSError as e:

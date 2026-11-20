@@ -1,10 +1,10 @@
-import { CABLE_TYPES, CableManager } from './core/cableEngine.js?v=20261117_03';
-import { MODULES, getModuleById } from './core/modulesData.js?v=20261117_03';
-import { CircuitSolver } from './core/circuitSolver.js?v=20261117_03';
-import { SoundEngine } from './audio/soundEngine.js?v=20261117_03';
-import { TrainerScene3D } from './scene/trainerScene3D.js?v=20261117_03';
-import { ComponentInspector3D, INSPECTOR_COMPONENTS } from './scene/componentInspector3D.js?v=20261117_03';
-import { MULTIMETER_MODES, MultimeterEngine } from './core/multimeterEngine.js?v=20261117_03';
+import { CABLE_TYPES, CableManager } from './core/cableEngine.js?v=20261120_01';
+import { MODULES, getModuleById } from './core/modulesData.js?v=20261120_01';
+import { CircuitSolver } from './core/circuitSolver.js?v=20261120_01';
+import { SoundEngine } from './audio/soundEngine.js?v=20261120_01';
+import { TrainerScene3D } from './scene/trainerScene3D.js?v=20261120_01';
+import { ComponentInspector3D, INSPECTOR_COMPONENTS } from './scene/componentInspector3D.js?v=20261120_01';
+import { MULTIMETER_MODES, MultimeterEngine } from './core/multimeterEngine.js?v=20261120_01';
 
 // Short sidebar group names (full category text stays in module data)
 const GROUP_SHORT = {
@@ -68,6 +68,7 @@ class AutomotiveBenchApp {
     this.elWireRackItems = $('wire-rack-items');
     this.elToast = $('hud-toast');
     this.elToastText = $('hud-text');
+    this.elPinTooltip = $('pin-hover-tooltip');
     this.elBtnCancelPin = $('btn-cancel-pin');
     this.elBtnColorRed = $('btn-color-red');
     this.elBtnColorBlack = $('btn-color-black');
@@ -320,6 +321,15 @@ class AutomotiveBenchApp {
       });
     }
 
+    const btnToolboxMin = $('btn-toolbox-minimize');
+    const toolboxTray = $('toolbox-tray');
+    if (btnToolboxMin && toolboxTray) {
+      btnToolboxMin.addEventListener('click', () => {
+        const collapsed = toolboxTray.classList.toggle('is-minimized');
+        btnToolboxMin.setAttribute('aria-expanded', String(!collapsed));
+      });
+    }
+
     this.elBtnColorRed.addEventListener('click', () => this._setWireColor('red'));
     this.elBtnColorBlack.addEventListener('click', () => this._setWireColor('black'));
 
@@ -506,22 +516,46 @@ class AutomotiveBenchApp {
     if (!modal || !btnOpen || !stageContainer) return;
 
     this.inspector3D = null;
+    this.activeInspectorCategory = 'bodi';
     this.activeInspectorCompId = 'headlamp';
 
-    // Render component tabs
-    tabsWrap.innerHTML = '';
-    for (const item of INSPECTOR_COMPONENTS) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'insp-tab-btn';
-      b.dataset.compId = item.id;
-      b.textContent = item.title.split(' (')[0];
-      b.addEventListener('click', () => this._selectInspectorComponent(item.id));
-      tabsWrap.appendChild(b);
-    }
+    const renderCategoryTabs = (cat) => {
+      this.activeInspectorCategory = cat;
+      document.querySelectorAll('[data-insp-cat]').forEach((b) => {
+        b.classList.toggle('is-active', b.dataset.inspCat === cat);
+      });
+      tabsWrap.innerHTML = '';
+      const filtered = INSPECTOR_COMPONENTS.filter((c) => (c.category || 'bodi') === cat);
+      for (const item of filtered) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'insp-tab-btn';
+        b.dataset.compId = item.id;
+        b.textContent = item.title.split(' (')[0];
+        b.addEventListener('click', () => this._selectInspectorComponent(item.id));
+        tabsWrap.appendChild(b);
+      }
+      if (filtered.length > 0 && !filtered.some((c) => c.id === this.activeInspectorCompId)) {
+        this._selectInspectorComponent(filtered[0].id);
+      } else {
+        document.querySelectorAll('.insp-tab-btn').forEach((b) => {
+          b.classList.toggle('is-active', b.dataset.compId === this.activeInspectorCompId);
+        });
+      }
+    };
+    this._renderInspectorCategoryTabs = renderCategoryTabs;
+
+    document.querySelectorAll('[data-insp-cat]').forEach((btn) => {
+      btn.addEventListener('click', () => renderCategoryTabs(btn.dataset.inspCat));
+    });
+
+    renderCategoryTabs('bodi');
 
     btnOpen.addEventListener('click', () => {
       const next = modal.hidden;
+      if (next && this.activeModule?.id?.startsWith('ac') && this.activeInspectorCategory !== 'ac') {
+        renderCategoryTabs('ac');
+      }
       this._setInspectorOpen(next);
     });
 
@@ -973,7 +1007,46 @@ class AutomotiveBenchApp {
     }
   }
 
-  handlePinHover({ pin, point3D }) {
+  handlePinHover({ pin, point3D, clientX, clientY }) {
+    // Smart Pin Callout Tooltip: readable at any camera distance
+    if (this.elPinTooltip) {
+      if (pin) {
+        const comp = (this.activeModule?.components || []).find((c) => c.id === pin.componentId);
+        const compTitle = comp ? comp.title : pin.componentId || '';
+        const stackCount = this.cableManager ? this.cableManager.getPinStackCount(pin.id) : 0;
+        const volt = this.lastSnapshot?.pinVoltages?.[pin.id] || '';
+        const dotColor =
+          pin.color === 'red'
+            ? '#ef4444'
+            : pin.color === 'blue'
+              ? '#3b82f6'
+              : pin.color === 'yellow'
+                ? '#f59e0b'
+                : '#64748b';
+        const metaParts = [];
+        if (volt && volt !== 'FLOAT') metaParts.push(volt);
+        if (stackCount > 0) metaParts.push(`${stackCount} kabel`);
+        const metaHtml = metaParts.length
+          ? `<span class="pin-tip-meta">${metaParts.join(' · ')}</span>`
+          : '';
+        this.elPinTooltip.innerHTML =
+          `<span class="pin-tip-dot" style="background:${dotColor}"></span>` +
+          `<span class="pin-tip-code">${pin.label}</span>` +
+          `<span class="pin-tip-comp">${compTitle}</span>` +
+          metaHtml;
+        this.elPinTooltip.hidden = false;
+
+        const stageRect = this.elPinTooltip.parentElement?.getBoundingClientRect();
+        if (stageRect && typeof clientX === 'number' && typeof clientY === 'number') {
+          const left = Math.max(12, Math.min(stageRect.width - 230, clientX - stageRect.left + 14));
+          const top = Math.max(12, clientY - stageRect.top - 42);
+          this.elPinTooltip.style.transform = `translate(${left.toFixed(0)}px, ${top.toFixed(0)}px)`;
+        }
+      } else {
+        this.elPinTooltip.hidden = true;
+      }
+    }
+
     if (!this.selectedStartPin) return;
     const v = this.scene3D.updatePreviewWire({
       startPin: this.selectedStartPin,
@@ -1163,6 +1236,7 @@ class AutomotiveBenchApp {
       last = now;
       if (!this.inspector3D?.isOpen) {
         const snapshot = this.solver.step(this.cableManager.getCables(), dt);
+        this.lastSnapshot = snapshot;
         this.scene3D.syncSimulation(snapshot);
         // Throttle UI DOM updates to ~15 Hz to eliminate main thread DOM thrashing & layout recalc
         if (now - lastUiUpdate > 66) {
