@@ -134,7 +134,7 @@ export class TrainerScene3D {
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.80;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -4569,13 +4569,30 @@ export class TrainerScene3D {
     const [px, py, pz] = pin.pos;
     const hex = WIRE_COLOR_HEX[color] || 0xd93829;
 
+    if (!this._plugGeometries) {
+      const jawGeo = new THREE.BoxGeometry(0.34, 0.28, 0.44);
+      const bodyGeo = new THREE.CylinderGeometry(0.084, 0.098, 0.19, 10);
+      bodyGeo.rotateX(Math.PI / 2);
+      const tipGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.21, 8);
+      tipGeo.rotateX(Math.PI / 2);
+      this._plugGeometries = { jawGeo, bodyGeo, tipGeo };
+    }
+    if (!this._plugMaterials) {
+      this._plugMaterials = {
+        byHex: new Map(),
+        tipGold: new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.85, roughness: 0.2 }),
+      };
+    }
+    let bodyMat = this._plugMaterials.byHex.get(hex);
+    if (!bodyMat) {
+      bodyMat = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.34, metalness: 0.06 });
+      this._plugMaterials.byHex.set(hex, bodyMat);
+    }
+
     if (category === 'alligator' && pin.terminalType === 'battery_post') {
       const yOffset = 0.32 + stackIndex * 0.22;
       plugGroup.position.set(px, py + yOffset, pz);
-      const jawGeo = new THREE.BoxGeometry(0.34, 0.28, 0.44);
-      const jawMat = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.36, metalness: 0.08 });
-      const jaw = new THREE.Mesh(jawGeo, jawMat);
-      jaw.castShadow = true;
+      const jaw = new THREE.Mesh(this._plugGeometries.jawGeo, bodyMat);
       jaw.userData = { pinId: pin.id, pinData: pin, cableId };
       plugGroup.add(jaw);
       this.interactiveTargets.push(jaw);
@@ -4599,18 +4616,11 @@ export class TrainerScene3D {
       plugGroup.rotation.x = tiltX;
     }
 
-    const bodyGeo = new THREE.CylinderGeometry(0.084, 0.098, 0.19, 14);
-    bodyGeo.rotateX(Math.PI / 2);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.34, metalness: 0.06 });
-    const body = new THREE.Mesh(bodyGeo, bodyMat);
-    body.castShadow = true;
+    const body = new THREE.Mesh(this._plugGeometries.bodyGeo, bodyMat);
     body.userData = { pinId: pin.id, pinData: pin, cableId };
     plugGroup.add(body);
 
-    const tipGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.21, 10);
-    tipGeo.rotateX(Math.PI / 2);
-    const tipMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.85, roughness: 0.2 });
-    const tip = new THREE.Mesh(tipGeo, tipMat);
+    const tip = new THREE.Mesh(this._plugGeometries.tipGeo, this._plugMaterials.tipGold);
     tip.userData = { pinId: pin.id, pinData: pin, cableId };
     plugGroup.add(tip);
 
@@ -4946,9 +4956,19 @@ export class TrainerScene3D {
 
     this.interactiveTargets = this.interactiveTargets.filter((m) => !m.userData?.isCablePart);
     while (this.cablesLayer.children.length > 0) {
-      this.cablesLayer.remove(this.cablesLayer.children[0]);
+      const oldGroup = this.cablesLayer.children[0];
+      oldGroup.traverse((child) => {
+        if (child.isMesh && child.userData?.isCableTube && child.geometry) {
+          child.geometry.dispose();
+        }
+      });
+      this.cablesLayer.remove(oldGroup);
     }
     this.cableMeshes.clear();
+
+    if (!this._wireMaterials) {
+      this._wireMaterials = new Map();
+    }
 
     const pinMap = new Map((this.module?.pins || []).map((p) => [p.id, p]));
     const explodeZ = this.explodeProgress * 1.45;
@@ -4996,18 +5016,21 @@ export class TrainerScene3D {
           endNormal: plugB.normal,
         }
       );
-      // Realistic slim flexible PVC automotive jumper wire (prevents heavy visual stacking!)
+      // Realistic slim flexible PVC automotive jumper wire (shared materials + low-poly smooth tube)
       const tubeRadius = cable.category === 'alligator' ? 0.040 : 0.024;
-      const tubeGeo = new THREE.TubeGeometry(curve, 28, tubeRadius, 8, false);
-      const tubeMat = new THREE.MeshStandardMaterial({
-        color: WIRE_COLOR_HEX[cable.color] || 0xd93829,
-        roughness: 0.34,
-        metalness: 0.05,
-      });
+      const tubeGeo = new THREE.TubeGeometry(curve, 22, tubeRadius, 6, false);
+      const wireHex = WIRE_COLOR_HEX[cable.color] || 0xd93829;
+      let tubeMat = this._wireMaterials.get(wireHex);
+      if (!tubeMat) {
+        tubeMat = new THREE.MeshStandardMaterial({
+          color: wireHex,
+          roughness: 0.34,
+          metalness: 0.05,
+        });
+        this._wireMaterials.set(wireHex, tubeMat);
+      }
       const tubeMesh = new THREE.Mesh(tubeGeo, tubeMat);
-      tubeMesh.castShadow = true;
-      tubeMesh.receiveShadow = true;
-      tubeMesh.userData = { cableId: cable.id, isCablePart: true };
+      tubeMesh.userData = { cableId: cable.id, isCablePart: true, isCableTube: true };
       cableGroup.add(tubeMesh);
       this.interactiveTargets.push(tubeMesh);
 
@@ -5736,7 +5759,7 @@ export class TrainerScene3D {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
   }
 
   renderFrame(deltaSeconds = 0.016) {
@@ -5751,22 +5774,27 @@ export class TrainerScene3D {
       this.controls.target.y = FLOOR_Y + 1.2;
     }
 
-    // Smooth exploded view interpolation (uniform forward +Z along trainer front so angled console components never collide with upper row)
+    // Smooth exploded view interpolation — only mutate 100+ object matrices when actively transitioning
     const targetExplode = this.explodedView ? 1 : 0;
-    this.explodeProgress += (targetExplode - this.explodeProgress) * Math.min(1, deltaSeconds * 9);
+    const explodeDelta = Math.abs(targetExplode - this.explodeProgress);
+    if (explodeDelta > 0.0005) {
+      this.explodeProgress += (targetExplode - this.explodeProgress) * Math.min(1, deltaSeconds * 9);
+      if (Math.abs(targetExplode - this.explodeProgress) <= 0.0005) {
+        this.explodeProgress = targetExplode;
+      }
+      const lift = this.explodeProgress * 1.45;
+      for (const [, group] of this.componentGroups.entries()) {
+        if (group.userData.type === 'battery_12v') continue;
+        group.position.y = group.userData.baseY;
+        group.position.z = group.userData.baseZ + lift;
+      }
 
-    const lift = this.explodeProgress * 1.45;
-    for (const [, group] of this.componentGroups.entries()) {
-      if (group.userData.type === 'battery_12v') continue;
-      group.position.y = group.userData.baseY;
-      group.position.z = group.userData.baseZ + lift;
-    }
-
-    for (const [, pinGroup] of this.pinMeshes.entries()) {
-      const pData = pinGroup.userData.pinData;
-      if (pData?.terminalType === 'battery_post') continue;
-      pinGroup.position.y = pData.pos[1];
-      pinGroup.position.z = pData.pos[2] + lift;
+      for (const [, pinGroup] of this.pinMeshes.entries()) {
+        const pData = pinGroup.userData.pinData;
+        if (pData?.terminalType === 'battery_post') continue;
+        pinGroup.position.y = pData.pos[1];
+        pinGroup.position.z = pData.pos[2] + lift;
+      }
     }
 
     // Rebuild cable curves when explodeProgress transitions so cables route underneath lifted components

@@ -70,6 +70,11 @@ export class CircuitSolver {
     this.blownFuses = new Set(); // stores fuse channel keys like 'F1', 'F2', etc.
     this.flasherTimer = 0;
     this.flasherOn = true;
+    this._flasherActive = false;
+    this._stateVersion = 0;
+    this._solveVersion = 0;
+    this._cachedKey = null;
+    this._cachedElectrical = null;
 
     for (const comp of moduleDef.components || []) {
       if (comp.defaultState !== undefined) {
@@ -79,7 +84,10 @@ export class CircuitSolver {
   }
 
   setSwitchState(componentId, stateValue) {
-    this.switchStates[componentId] = stateValue;
+    if (this.switchStates[componentId] !== stateValue) {
+      this.switchStates[componentId] = stateValue;
+      this._stateVersion++;
+    }
   }
 
   getSwitchState(componentId) {
@@ -87,15 +95,26 @@ export class CircuitSolver {
   }
 
   setDimPass(active) {
-    this.dimPassActive = Boolean(active);
+    const next = Boolean(active);
+    if (this.dimPassActive !== next) {
+      this.dimPassActive = next;
+      this._stateVersion++;
+    }
   }
 
   setIgnStart(active) {
-    this.ignStartActive = Boolean(active);
+    const next = Boolean(active);
+    if (this.ignStartActive !== next) {
+      this.ignStartActive = next;
+      this._stateVersion++;
+    }
   }
 
   resetFuses() {
-    this.blownFuses.clear();
+    if (this.blownFuses.size > 0) {
+      this.blownFuses.clear();
+      this._stateVersion++;
+    }
   }
 
   _getFuseChannels() {
@@ -384,7 +403,112 @@ export class CircuitSolver {
     return visited;
   }
 
+  _computeCablesKey(cables) {
+    let key = String(cables.length);
+    for (let i = 0; i < cables.length; i++) {
+      const c = cables[i];
+      key += '|' + (c.id || `${c.fromPin}>${c.toPin}`);
+    }
+    return key;
+  }
+
+  _stepRefrigeration(electrical, deltaSeconds) {
+    if (!this.refrigState) {
+      this.refrigState = {
+        lowPressurePsi: 80.0,
+        highPressurePsi: 80.0,
+        tempAmbient: 28.5,
+        tempEvapIn: 27.0,
+        tempEvapOut: 27.0,
+        sightGlass: 'STAGNANT',
+      };
+    }
+
+    const { componentStates, nodeVoltages, isDirectShort } = electrical;
+    const vAcross = (a, b) => {
+      const va = nodeVoltages[a];
+      const vb = nodeVoltages[b];
+      if (va === null || va === undefined || vb === null || vb === undefined) return 0;
+      return Math.abs(va - vb);
+    };
+
+    const rawClutchActive = Boolean(
+      componentStates['MAG_CLUTCH']?.energized ||
+      (!isDirectShort && vAcross('CLUTCH_POS', 'CLUTCH_GND') >= 6.5)
+    );
+    const driveMotorState = this.switchStates['MOTOR_DRIVE_AC'] ?? 'IDLE_800';
+    const driveMotorRpm =
+      driveMotorState === 'IDLE_800' ? 800 :
+      driveMotorState === 'MED_1500' ? 1500 :
+      driveMotorState === 'HIGH_2200' ? 2200 : 0;
+    const driveMotorOn = driveMotorRpm > 0;
+    const blowerSpeed = componentStates['EVAPORATOR_UNIT']?.speed || 0;
+    const blowerVoltageDrop = componentStates['EVAPORATOR_UNIT']?.voltage || 0.0;
+    const isFanCooling = Boolean(
+      componentStates['EXTRA_FAN']?.energized ||
+      (!isDirectShort && vAcross('FAN_POS', 'FAN_GND') >= 4.0)
+    );
+
+    const clutchActive = rawClutchActive && (this.module.id !== 'ac03' || blowerSpeed > 0);
+    const isCompressorPumping = clutchActive && (this.module.id !== 'ac03' || driveMotorOn);
+
+    if (isCompressorPumping) {
+      const targetLow = Math.max(26.0, 34.0 - blowerSpeed * 2.0);
+      const targetHigh = isFanCooling ? 175.0 : 310.0;
+      const targetEvapOut = Math.max(4.0, 13.5 - blowerSpeed * 3.0);
+
+      this.refrigState.lowPressurePsi += (targetLow - this.refrigState.lowPressurePsi) * Math.min(1, deltaSeconds * 2.0);
+      this.refrigState.highPressurePsi += (targetHigh - this.refrigState.highPressurePsi) * Math.min(1, deltaSeconds * 1.8);
+      this.refrigState.tempEvapOut += (targetEvapOut - this.refrigState.tempEvapOut) * Math.min(1, deltaSeconds * 0.9);
+      this.refrigState.sightGlass = 'CLEAR';
+    } else {
+      this.refrigState.lowPressurePsi += (80.0 - this.refrigState.lowPressurePsi) * Math.min(1, deltaSeconds * 1.2);
+      this.refrigState.highPressurePsi += (80.0 - this.refrigState.highPressurePsi) * Math.min(1, deltaSeconds * 1.2);
+      this.refrigState.tempEvapOut += (this.refrigState.tempEvapIn - this.refrigState.tempEvapOut) * Math.min(1, deltaSeconds * 0.5);
+      this.refrigState.sightGlass = 'STAGNANT';
+    }
+
+    return {
+      lowPressurePsi: this.refrigState.lowPressurePsi,
+      highPressurePsi: this.refrigState.highPressurePsi,
+      t1Ambient: this.refrigState.tempAmbient,
+      t2EvapInlet: this.refrigState.tempEvapIn,
+      t3VentDischarge: this.refrigState.tempEvapOut,
+      sightGlassState: this.refrigState.sightGlass,
+      clutchActive,
+      clutchEngaged: clutchActive,
+      compressorPumping: isCompressorPumping,
+      compressorRpm: clutchActive ? driveMotorRpm : 0,
+      driveMotorRpm,
+      blowerSpeed,
+      blowerVoltageDrop,
+      fanRunning: isFanCooling,
+    };
+  }
+
   step(cables = [], deltaSeconds = 0.016) {
+    // Advance flasher blink timer cheaply before checking cache
+    let alreadyTickedFlasher = false;
+    if (this._flasherActive) {
+      alreadyTickedFlasher = true;
+      this.flasherTimer += deltaSeconds;
+      if (this.flasherTimer >= 0.35) {
+        this.flasherTimer = 0;
+        this.flasherOn = !this.flasherOn;
+        this._stateVersion++;
+      }
+    }
+
+    const cacheKey = `${this.module.id}#${this._stateVersion}#${this.blownFuses.size}#${this._computeCablesKey(cables)}`;
+    if (cacheKey === this._cachedKey && this._cachedElectrical) {
+      const refrigeration = this._stepRefrigeration(this._cachedElectrical, deltaSeconds);
+      return {
+        ...this._cachedElectrical,
+        shortCircuitEvents: [],
+        refrigeration,
+      };
+    }
+
     const shortCircuitEvents = [];
     const pinIds = (this.module.pins || []).map((p) => p.id);
     const fuseChannels = this._getFuseChannels();
@@ -557,10 +681,12 @@ export class CircuitSolver {
 
         if (flCurrent >= 0.4) {
           flasherActive = true;
-          this.flasherTimer += deltaSeconds;
-          if (this.flasherTimer >= 0.35) {
-            this.flasherTimer = 0;
-            this.flasherOn = !this.flasherOn;
+          if (!alreadyTickedFlasher) {
+            this.flasherTimer += deltaSeconds;
+            if (this.flasherTimer >= 0.35) {
+              this.flasherTimer = 0;
+              this.flasherOn = !this.flasherOn;
+            }
           }
           if (this.flasherOn) {
             flasherBranches.push({ a: 'FL_B', b: 'FL_L', r: R_FLASHER_CONTACT, kind: 'flasher_contact' });
@@ -886,55 +1012,6 @@ export class CircuitSolver {
       componentStates[comp.id] = state;
     }
 
-    if (!this.refrigState) {
-      this.refrigState = {
-        lowPressurePsi: 80.0,
-        highPressurePsi: 80.0,
-        tempAmbient: 28.5,
-        tempEvapIn: 27.0,
-        tempEvapOut: 27.0,
-        sightGlass: 'STAGNANT',
-      };
-    }
-
-    const rawClutchActive = Boolean(
-      componentStates['MAG_CLUTCH']?.energized ||
-      (!isDirectShort && voltageAcross('CLUTCH_POS', 'CLUTCH_GND') >= 6.5)
-    );
-    const driveMotorState = this.switchStates['MOTOR_DRIVE_AC'] ?? 'IDLE_800';
-    const driveMotorRpm =
-      driveMotorState === 'IDLE_800' ? 800 :
-      driveMotorState === 'MED_1500' ? 1500 :
-      driveMotorState === 'HIGH_2200' ? 2200 : 0;
-    const driveMotorOn = driveMotorRpm > 0;
-    const blowerSpeed = componentStates['EVAPORATOR_UNIT']?.speed || 0;
-    const blowerVoltageDrop = componentStates['EVAPORATOR_UNIT']?.voltage || 0.0;
-    const isFanCooling = Boolean(
-      componentStates['EXTRA_FAN']?.energized ||
-      (!isDirectShort && voltageAcross('FAN_POS', 'FAN_GND') >= 4.0)
-    );
-
-    // In ac03, safety interlock requires blower to be ON (speed > 0)
-    const clutchActive = rawClutchActive && (this.module.id !== 'ac03' || blowerSpeed > 0);
-    const isCompressorPumping = clutchActive && (this.module.id !== 'ac03' || driveMotorOn);
-
-    if (isCompressorPumping) {
-      // Higher blower speed yields colder air discharge and crisper suction drop
-      const targetLow = Math.max(26.0, 34.0 - blowerSpeed * 2.0);
-      const targetHigh = isFanCooling ? 175.0 : 310.0;
-      const targetEvapOut = Math.max(4.0, 13.5 - blowerSpeed * 3.0);
-
-      this.refrigState.lowPressurePsi += (targetLow - this.refrigState.lowPressurePsi) * Math.min(1, deltaSeconds * 2.0);
-      this.refrigState.highPressurePsi += (targetHigh - this.refrigState.highPressurePsi) * Math.min(1, deltaSeconds * 1.8);
-      this.refrigState.tempEvapOut += (targetEvapOut - this.refrigState.tempEvapOut) * Math.min(1, deltaSeconds * 0.9);
-      this.refrigState.sightGlass = 'CLEAR';
-    } else {
-      this.refrigState.lowPressurePsi += (80.0 - this.refrigState.lowPressurePsi) * Math.min(1, deltaSeconds * 1.2);
-      this.refrigState.highPressurePsi += (80.0 - this.refrigState.highPressurePsi) * Math.min(1, deltaSeconds * 1.2);
-      this.refrigState.tempEvapOut += (this.refrigState.tempEvapIn - this.refrigState.tempEvapOut) * Math.min(1, deltaSeconds * 0.5);
-      this.refrigState.sightGlass = 'STAGNANT';
-    }
-
     const checklistStatus = (this.module.checklist || []).map((item) => ({
       id: item.id,
       label: item.label,
@@ -948,7 +1025,12 @@ export class CircuitSolver {
 
     const batteryVoltage = Number((nodeVoltages['BAT_POS'] ?? BATTERY_VOC).toFixed(2));
 
-    return {
+    this._flasherActive = flasherActive;
+    this._solveVersion++;
+
+    const electrical = {
+      solveVersion: this._solveVersion,
+      isDirectShort,
       pinVoltages,
       nodeVoltages,
       batteryVoltage,
@@ -957,27 +1039,22 @@ export class CircuitSolver {
       passiveBranches,
       pinIds,
       componentStates,
-      shortCircuitEvents,
       checklistStatus,
       boardPowered,
       posSet,
       negSet,
-      refrigeration: {
-        lowPressurePsi: this.refrigState.lowPressurePsi,
-        highPressurePsi: this.refrigState.highPressurePsi,
-        t1Ambient: this.refrigState.tempAmbient,
-        t2EvapInlet: this.refrigState.tempEvapIn,
-        t3VentDischarge: this.refrigState.tempEvapOut,
-        sightGlassState: this.refrigState.sightGlass,
-        clutchActive,
-        clutchEngaged: clutchActive,
-        compressorPumping: isCompressorPumping,
-        compressorRpm: clutchActive ? driveMotorRpm : 0,
-        driveMotorRpm,
-        blowerSpeed,
-        blowerVoltageDrop,
-        fanRunning: isFanCooling,
-      },
+    };
+
+    // Update cache key using post-solve blownFuses.size in case a fuse blew during this step
+    this._cachedKey = `${this.module.id}#${this._stateVersion}#${this.blownFuses.size}#${this._computeCablesKey(cables)}`;
+    this._cachedElectrical = electrical;
+
+    const refrigeration = this._stepRefrigeration(electrical, deltaSeconds);
+
+    return {
+      ...electrical,
+      shortCircuitEvents,
+      refrigeration,
     };
   }
 }

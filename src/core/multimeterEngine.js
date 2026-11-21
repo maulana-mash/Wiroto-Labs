@@ -51,6 +51,7 @@ export class MultimeterEngine {
       beeping: false,
       isNegative: false,
     };
+    this._lastReadKey = null;
   }
 
   setMode(mode) {
@@ -130,7 +131,19 @@ export class MultimeterEngine {
       passiveBranches = null,
       activeBranches = null,
       pinIds = null,
+      solveVersion = null,
     } = solverSnapshot || {};
+
+    // Fast path: skip repeated Thevenin / Shunt matrix solves when circuit state & probes have not changed
+    if (solveVersion !== null) {
+      const readKey = `${this.mode}|${this.redPin}|${this.blackPin}|${solveVersion}|${boardPowered ? 1 : 0}|${activeModule?.id || ''}`;
+      if (readKey === this._lastReadKey) {
+        return this.reading;
+      }
+      this._lastReadKey = readKey;
+    } else {
+      this._lastReadKey = null;
+    }
 
     // ------------------------------------------------------------------------
     // MODE 1: DC VOLTAGE (V_DC) — Exact Potential Difference & Voltage Drops
