@@ -1,17 +1,22 @@
 import { solveLinearDC } from './nodalSolver.js';
 
-export const BATTERY_VOC = 12.6; // Open-circuit 12V automotive battery voltage (fully charged)
-export const BATTERY_R_INT = 0.02; // Internal resistance of healthy 12V 45Ah lead-acid battery (Ohms)
+export const BATTERY_VOC = 12.65; // Open-circuit 12V/45Ah automotive battery voltage (SAE/OEM reference baseline)
+export const BATTERY_R_INT = 0.025; // Effective internal + polarization resistance (15mOhm r_int + 10mOhm polarization sag)
 
-// Realistic automotive copper conductor & contact resistances (Ohms) matching real TKR trainer V-drops
-const R_BUS_SEG = 0.003;
-const R_FUSE_INTACT = 0.012;
-const R_IGN_CONTACT = 0.018;
-const R_SWITCH_CONTACT = 0.012;
-const R_RELAY_CONTACT = 0.012;
-const R_FLASHER_CONTACT = 0.018;
+// Calibrated conductor & contact resistances (Ohms) matching SAE J1128 / ISO 6722 / OEM Trainer Reference Dataset:
+// - Single wire + banana plug: <= 0.10V ideal
+// - Fuse & holder: <= 0.03V - 0.07V
+// - Switch / Relay contact (30-87): <= 0.05V - 0.09V
+// - Ground return path: <= 0.10V - 0.16V
+// - Total circuit V-drop at medium/high load (9-10A): ~0.55V - 0.61V (<= 5%)
+const R_BUS_SEG = 0.0015;
+const R_FUSE_INTACT = 0.0068;
+const R_IGN_CONTACT = 0.0085;
+const R_SWITCH_CONTACT = 0.011;
+const R_RELAY_CONTACT = 0.0088;
+const R_FLASHER_CONTACT = 0.016;
 
-// Nominal component load resistances (Ohms)
+// Nominal component load resistances (Ohms) calibrated to OEM Trainer Reference Dataset
 export const LOAD_RESISTANCES = {
   R1_10: 10.0,
   R2_50: 50.0,
@@ -19,32 +24,32 @@ export const LOAD_RESISTANCES = {
   LAMP_5W: 28.8,
   LAMP_10W: 14.4,
   LAMP_21W: 6.8,
-  HEADLAMP_LOW: 2.6,
-  HEADLAMP_HIGH: 2.4,
+  HEADLAMP_LOW: 2.62,
+  HEADLAMP_HIGH: 2.40,
   LAMP_LED: 240.0,
   IND_PILOT: 100.0,
   RELAY_COIL: 78.0,
   FLASHER_COIL: 240.0,
-  HORN: 2.0,
+  HORN: 1.54,
   BUZZER: 150.0,
   MOTOR_WASHER: 4.2,
-  MOTOR_BLOWER: 2.0,
-  BLW_RES_LOW_MED: 1.38,
-  BLW_RES_MED_HIGH: 0.68,
-  BLW_RES_HIGH_IN: 0.02,
-  MAG_CLUTCH: 3.8,
-  EXTRA_FAN: 2.4,
+  MOTOR_BLOWER: 1.12,
+  BLW_RES_LOW_MED: 0.78,
+  BLW_RES_MED_HIGH: 0.35,
+  BLW_RES_HIGH_IN: 0.005,
+  MAG_CLUTCH: 3.84,
+  EXTRA_FAN: 2.16,
 };
 
 export function getCableResistance(cable) {
   const typeId = cable?.cableTypeId || '';
-  if (typeId === 'alligator-red' || typeId === 'alligator-black') return 0.012;
-  if (typeId === 'jumper-10') return 0.008;
-  if (typeId === 'jumper-20') return 0.011;
-  if (typeId === 'jumper-25') return 0.013;
-  if (typeId === 'jumper-30') return 0.015;
-  if (typeId === 'jumper-50') return 0.022;
-  return 0.012;
+  if (typeId === 'alligator-red' || typeId === 'alligator-black') return 0.0052;
+  if (typeId === 'jumper-10') return 0.0042;
+  if (typeId === 'jumper-20') return 0.0054;
+  if (typeId === 'jumper-25') return 0.006;
+  if (typeId === 'jumper-30') return 0.0066;
+  if (typeId === 'jumper-50') return 0.0085;
+  return 0.0055;
 }
 
 function brightnessFromVoltage(v, minTurnOn = 2.0) {

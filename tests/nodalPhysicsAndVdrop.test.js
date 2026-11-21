@@ -178,3 +178,63 @@ test('Multimeter A_DC measures real series current via shunt and reads 0.00A on 
   const aOpen = readDmm(dmm, 'A_DC', 'F1_OUT', 'SW_IN', snapOpen, mod1, cables);
   assert.equal(aOpen.display, '0.00', 'Open circuit ammeter must read 0.00A');
 });
+
+test('SAE J1128 / ISO 6722 Reference Baseline compliance: V_OCV=12.65V, fuse/relay/ground tolerances, and AC Full Load sag', () => {
+  const dmm = new MultimeterEngine();
+
+  // 1. No-load baseline (Fig. 01 with switch OFF): V_OCV = 12.65V, V across open switch = 12.65V, V_drop wire = 0.00V
+  const mod1 = getModuleById('fig01');
+  const mgr1 = new CableManager(mod1.pins);
+  for (const w of mod1.demoWires) mgr1.addCable(w);
+  const s1 = new CircuitSolver(mod1);
+  s1.setSwitchState('IGN_SW', 'IG');
+  s1.setSwitchState('SW_PUSH', 'OFF');
+  const c1 = mgr1.getCables();
+  const snap1Off = s1.step(c1, 0.05);
+  assert.equal(readDmm(dmm, 'V_DC', 'BAT_POS', 'BAT_NEG', snap1Off, mod1, c1).display, '12.65');
+  assert.equal(readDmm(dmm, 'V_DC', 'SW_IN', 'SW_OUT', snap1Off, mod1, c1).display, '12.65');
+  assert.equal(readDmm(dmm, 'V_DC', 'BAT_POS', 'SW_IN', snap1Off, mod1, c1).display, '0.00');
+
+  // 2. Headlamp Low & High Beam segment tolerances (Table 2.3 & 5.2: fuse ~0.06-0.07V, relay 30-87 ~0.08-0.09V, total V-drop <= 0.62V)
+  const mod4 = getModuleById('fig04');
+  const mgr4 = new CableManager(mod4.pins);
+  for (const w of mod4.demoWires) mgr4.addCable(w);
+  const s4 = new CircuitSolver(mod4);
+  const c4 = mgr4.getCables();
+
+  s4.setSwitchState('SW_DIMMER', 'LOW');
+  const snapLow = s4.step(c4, 0.05);
+  assert.equal(readDmm(dmm, 'V_DC', 'F1_IN', 'F1_OUT', snapLow, mod4, c4).display, '0.06');
+  assert.equal(readDmm(dmm, 'V_DC', 'RLOW_30', 'RLOW_87', snapLow, mod4, c4).display, '0.08');
+  assert.equal(readDmm(dmm, 'V_DC', 'HLL_LOW', 'HLL_GND', snapLow, mod4, c4).display, '11.85');
+
+  s4.setSwitchState('SW_DIMMER', 'HIGH');
+  const snapHigh = s4.step(c4, 0.05);
+  assert.equal(readDmm(dmm, 'V_DC', 'F2_IN', 'F2_OUT', snapHigh, mod4, c4).display, '0.07');
+  assert.equal(readDmm(dmm, 'V_DC', 'RHIGH_30', 'RHIGH_87', snapHigh, mod4, c4).display, '0.09');
+  const vDropTotalHigh =
+    parseFloat(readDmm(dmm, 'V_DC', 'BAT_POS', 'HLL_HIGH', snapHigh, mod4, c4).display) +
+    parseFloat(readDmm(dmm, 'V_DC', 'HLL_GND', 'BAT_NEG', snapHigh, mod4, c4).display);
+  assert.ok(vDropTotalHigh >= 0.50 && vDropTotalHigh <= 0.65, `Expected High Beam total V-drop ~0.57-0.61V, got ${vDropTotalHigh.toFixed(2)}V`);
+
+  // 3. AC 03 Full Load (Table 6.3: Blower Speed 3 + Extra Fan + Magnetic Clutch simultaneous ~19A, V_bat ~12.1-12.2V)
+  const modAc3 = getModuleById('ac03');
+  const mgrAc3 = new CableManager(modAc3.pins);
+  for (const w of modAc3.demoWires) mgrAc3.addCable(w);
+  const sAc3 = new CircuitSolver(modAc3);
+  sAc3.setSwitchState('IGN_SW', 'IG');
+  sAc3.setSwitchState('SW_BLOWER', 'SPEED_3');
+  sAc3.setSwitchState('SW_AC_PUSH', 'ON');
+  sAc3.setSwitchState('THERMOSTAT_AC', 'ON');
+  sAc3.setSwitchState('PRESSURE_SWITCH', 'CLOSED');
+  const cAc3 = mgrAc3.getCables();
+  const snapAc3 = sAc3.step(cAc3, 0.05);
+
+  assert.ok(snapAc3.batteryCurrent >= 18.0 && snapAc3.batteryCurrent <= 20.5, `Expected full AC load ~19A, got ${snapAc3.batteryCurrent}A`);
+  const vBatFull = parseFloat(readDmm(dmm, 'V_DC', 'BAT_POS', 'BAT_NEG', snapAc3, modAc3, cAc3).display);
+  const vBlowerFull = parseFloat(readDmm(dmm, 'V_DC', 'MTR_BLW_POS', 'MTR_BLW_GND', snapAc3, modAc3, cAc3).display);
+  const vClutchFull = parseFloat(readDmm(dmm, 'V_DC', 'CLUTCH_POS', 'CLUTCH_GND', snapAc3, modAc3, cAc3).display);
+  assert.ok(vBatFull >= 12.05 && vBatFull <= 12.25, `Expected battery sag to ~12.15V at 19A, got ${vBatFull}V`);
+  assert.ok(vBlowerFull >= 11.1 && vBlowerFull <= 11.5, `Expected full-load blower voltage ~11.3V, got ${vBlowerFull}V`);
+  assert.ok(vClutchFull >= 11.5 && vClutchFull <= 11.9, `Expected full-load clutch voltage ~11.7V, got ${vClutchFull}V`);
+});
