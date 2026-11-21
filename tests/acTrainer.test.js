@@ -41,35 +41,51 @@ test('ac01 Blower & Resistor: validates demo wires, speeds 0-1-2-3 voltage drops
   assert.equal(snap.refrigeration?.blowerSpeed, 0);
   assert.equal(snap.refrigeration?.blowerVoltageDrop, 0);
 
-  // 2. Speed 1 (Low speed via full resistance: ~6V)
+  // 2. Speed 1 (Low speed via full resistance: ~6V across motor, ~6V across resistor, real wire V-drop)
   solver.setSwitchState('SW_BLOWER', 'SPEED_1');
   snap = solver.step(mgr.getCables(), 0.1);
   assert.equal(snap.refrigeration?.blowerSpeed, 1);
-  assert.equal(snap.refrigeration?.blowerVoltageDrop, 6.0);
+  assert.ok(
+    snap.refrigeration?.blowerVoltageDrop >= 5.5 && snap.refrigeration?.blowerVoltageDrop <= 6.3,
+    `Expected Speed 1 motor voltage ~6V, got ${snap.refrigeration?.blowerVoltageDrop}`
+  );
   assert.equal(snap.componentStates['EVAPORATOR_UNIT']?.speed, 1);
 
-  // Multimeter DC Voltage across Blower Motor (+ to -)
+  // Multimeter DC Voltage across Blower Motor (+ to -) and across Blower Resistor
   meter.setMode('V_DC');
   meter.attachRedProbe('MTR_BLW_POS');
   meter.attachBlackProbe('MTR_BLW_GND');
   let read = meter.update(snap, mod, mgr.getCables());
-  assert.equal(read.display, '6.00', 'Multimeter should read 6.00V at blower speed 1');
+  const vSpeed1 = parseFloat(read.display);
+  assert.ok(vSpeed1 >= 5.5 && vSpeed1 <= 6.3, `Multimeter should read ~6V at speed 1, got ${read.display}`);
 
-  // 3. Speed 2 (Medium speed: ~9V)
+  meter.attachRedProbe('RES_LOW');
+  meter.attachBlackProbe('RES_IN');
+  const resDrop1 = parseFloat(meter.update(snap, mod, mgr.getCables()).display);
+  assert.ok(resDrop1 >= 5.5 && resDrop1 <= 6.6, `Resistor V-drop at speed 1 should be ~6V, got ${resDrop1}`);
+
+  // 3. Speed 2 (Medium speed: ~8.5-9.2V)
   solver.setSwitchState('SW_BLOWER', 'SPEED_2');
   snap = solver.step(mgr.getCables(), 0.1);
   assert.equal(snap.refrigeration?.blowerSpeed, 2);
-  assert.equal(snap.refrigeration?.blowerVoltageDrop, 9.0);
+  meter.attachRedProbe('MTR_BLW_POS');
+  meter.attachBlackProbe('MTR_BLW_GND');
   read = meter.update(snap, mod, mgr.getCables());
-  assert.equal(read.display, '9.00', 'Multimeter should read 9.00V at blower speed 2');
+  const vSpeed2 = parseFloat(read.display);
+  assert.ok(vSpeed2 >= 8.3 && vSpeed2 <= 9.3, `Multimeter should read ~8.8V at speed 2, got ${read.display}`);
+  assert.ok(vSpeed2 > vSpeed1 + 2.0, 'Speed 2 voltage must exceed Speed 1');
 
-  // 4. Speed 3 (High speed direct battery: 12.6V)
+  // 4. Speed 3 (High speed direct path: ~11.4-12.1V, strictly less than battery terminal due to real V-drop)
   solver.setSwitchState('SW_BLOWER', 'SPEED_3');
   snap = solver.step(mgr.getCables(), 0.1);
   assert.equal(snap.refrigeration?.blowerSpeed, 3);
-  assert.equal(snap.refrigeration?.blowerVoltageDrop, 12.6);
   read = meter.update(snap, mod, mgr.getCables());
-  assert.equal(read.display, '12.60', 'Multimeter should read 12.60V at blower speed 3');
+  const vSpeed3 = parseFloat(read.display);
+  meter.attachRedProbe('BAT_POS');
+  meter.attachBlackProbe('BAT_NEG');
+  const vBat3 = parseFloat(meter.update(snap, mod, mgr.getCables()).display);
+  assert.ok(vSpeed3 >= 11.2 && vSpeed3 <= 12.2, `Multimeter should read ~11.7V at speed 3, got ${read.display}`);
+  assert.ok(vSpeed3 < vBat3 - 0.25, `Motor voltage (${vSpeed3}V) must be less than battery (${vBat3}V) due to real V-drop`);
 
   // Checklist verification
   assert.ok(snap.checklistStatus.every((c) => c.completed), 'All ac01 checklist steps should be completed');

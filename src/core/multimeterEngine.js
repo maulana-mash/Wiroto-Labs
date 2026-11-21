@@ -1,6 +1,9 @@
 // Multimeter Engine for 3D Automotive Bench Simulator
-// Provides realistic digital multimeter calculations (DC Voltage, Resistance Ohm, Continuity Beep, DC Ampere)
+// Powered by real DC Linear Nodal Analysis (exact V-drop, Thevenin OHM/Continuity, and shunt A_DC).
 // Supports two-way synchronization between physical 3D multimeter and floating HUD widget.
+
+import { measureEquivalentResistance, measureSeriesAmmeter } from './nodalSolver.js';
+import { BATTERY_VOC, BATTERY_R_INT } from './circuitSolver.js';
 
 export const MULTIMETER_MODES = {
   OFF: 'OFF',
@@ -10,24 +13,26 @@ export const MULTIMETER_MODES = {
   A_DC: 'A_DC',
 };
 
-// Component nominal internal resistance values (Ohms at 12V cold)
+// Reference nominal component resistance table (Ohms at 12V cold)
 export const COMPONENT_NOMINAL_RESISTANCE = {
-  // Resistors
   R_10: 10.0,
   R_50: 50.0,
   R_100: 100.0,
-  // Bulbs (R = V^2 / P)
   LAMP_5W: 28.8,
+  LAMP_10W: 14.4,
   LAMP_21W: 6.8,
   LAMP_55W: 2.6,
-  LAMP_LED: 240.0, // High forward resistance equivalent
-  // Coils & Actuators
+  LAMP_60W: 2.4,
+  LAMP_LED: 240.0,
   RELAY_COIL: 78.0,
-  HORN: 1.8,
+  HORN: 2.0,
   BUZZER: 150.0,
   MOTOR: 4.2,
-  FUSE_INTACT: 0.1,
-  WIRE_IDEAL: 0.05,
+  MOTOR_BLOWER: 2.0,
+  MAG_CLUTCH: 3.8,
+  EXTRA_FAN: 2.4,
+  FUSE_INTACT: 0.025,
+  WIRE_IDEAL: 0.022,
 };
 
 export class MultimeterEngine {
@@ -81,7 +86,7 @@ export class MultimeterEngine {
     return this.hudMinimized;
   }
 
-  // Calculate measurement based on current solver state and module topology
+  // Calculate exact electrical measurement from current Nodal Solver snapshot
   update(solverSnapshot, activeModule, cables = []) {
     if (this.mode === MULTIMETER_MODES.OFF) {
       this.reading = {
@@ -117,49 +122,45 @@ export class MultimeterEngine {
       return this.reading;
     }
 
-    const { posSet = new Set(), negSet = new Set(), boardPowered = false } = solverSnapshot || {};
-    const pinVoltages = solverSnapshot?.pinVoltages || {};
+    const {
+      posSet = new Set(),
+      negSet = new Set(),
+      boardPowered = false,
+      nodeVoltages = null,
+      passiveBranches = null,
+      activeBranches = null,
+      pinIds = null,
+    } = solverSnapshot || {};
 
     // ------------------------------------------------------------------------
-    // MODE 1: DC VOLTAGE (V_DC) — Parallel Potential Difference
+    // MODE 1: DC VOLTAGE (V_DC) — Exact Potential Difference & Voltage Drops
     // ------------------------------------------------------------------------
     if (this.mode === MULTIMETER_MODES.V_DC) {
-      const redV = posSet.has(this.redPin) ? 12.6 : negSet.has(this.redPin) ? 0.0 : null;
-      const blackV = posSet.has(this.blackPin) ? 12.6 : negSet.has(this.blackPin) ? 0.0 : null;
+      let redV = null;
+      let blackV = null;
+
+      if (nodeVoltages) {
+        redV = nodeVoltages[this.redPin] ?? null;
+        blackV = nodeVoltages[this.blackPin] ?? null;
+      } else {
+        redV = posSet.has(this.redPin) ? BATTERY_VOC : negSet.has(this.redPin) ? 0.0 : null;
+        blackV = posSet.has(this.blackPin) ? BATTERY_VOC : negSet.has(this.blackPin) ? 0.0 : null;
+      }
 
       let vDiff = 0.0;
       let isNegative = false;
 
       if (redV !== null && blackV !== null) {
-        vDiff = redV - blackV;
-        if (vDiff < 0) {
+        const rawDiff = redV - blackV;
+        if (Math.abs(rawDiff) < 0.005) {
+          vDiff = 0.0;
+          isNegative = false;
+        } else if (rawDiff < 0) {
           isNegative = true;
-          vDiff = Math.abs(vDiff);
+          vDiff = Math.abs(rawDiff);
+        } else {
+          vDiff = rawDiff;
         }
-        // Small realistic load sag if lights or horn are on
-        const hasHeavyLoad = Object.values(solverSnapshot?.componentStates || {}).some(
-          (s) => s.energized && (s.highBeam || s.lowBeam || s.relayClosed)
-        );
-        if (hasHeavyLoad && vDiff > 10.0) {
-          vDiff = 11.95;
-        }
-
-        // Blower motor voltage drop through resistor network
-        const evapUnit = solverSnapshot?.componentStates?.EVAPORATOR_UNIT;
-        if (evapUnit && evapUnit.energized && evapUnit.voltage) {
-          const isMeasuringBlower =
-            (this.redPin === 'MTR_BLW_POS' && this.blackPin === 'MTR_BLW_GND') ||
-            (this.redPin === 'MTR_BLW_GND' && this.blackPin === 'MTR_BLW_POS');
-          if (isMeasuringBlower) {
-            vDiff = evapUnit.voltage;
-          }
-        }
-      } else if (redV !== null && blackV === null) {
-        // Black probe is floating
-        vDiff = 0.0;
-      } else if (redV === null && blackV !== null) {
-        // Red probe is floating
-        vDiff = 0.0;
       }
 
       this.reading = {
@@ -173,16 +174,23 @@ export class MultimeterEngine {
     }
 
     // ------------------------------------------------------------------------
-    // MODE 2 & 3: RESISTANCE (OHM) & CONTINUITY (BUZZER)
+    // MODE 2 & 3: RESISTANCE (OHM) & CONTINUITY (BUZZER) — Exact Thevenin R_eq
     // ------------------------------------------------------------------------
     if (this.mode === MULTIMETER_MODES.OHM || this.mode === MULTIMETER_MODES.CONTINUITY) {
-      // Check if circuit has live power from battery
-      const hasLivePower =
-        (posSet.has(this.redPin) || posSet.has(this.blackPin)) &&
-        boardPowered;
+      let hasLivePower = false;
+      if (boardPowered) {
+        if (nodeVoltages) {
+          const vR = nodeVoltages[this.redPin];
+          const vB = nodeVoltages[this.blackPin];
+          hasLivePower =
+            (vR !== null && vR !== undefined && Math.abs(vR) > 0.5) ||
+            (vB !== null && vB !== undefined && Math.abs(vB) > 0.5);
+        } else {
+          hasLivePower = posSet.has(this.redPin) || posSet.has(this.blackPin);
+        }
+      }
 
       if (hasLivePower) {
-        // Warning: cannot measure resistance on live circuit!
         this.reading = {
           display: 'Err',
           unit: 'LIVE',
@@ -193,23 +201,22 @@ export class MultimeterEngine {
         return this.reading;
       }
 
-      // Check if probes are directly shorted or connected on same wire
-      const isDirectlyConnected =
-        this.redPin === this.blackPin ||
-        cables.some(
-          (c) =>
-            (c.fromPin === this.redPin && c.toPin === this.blackPin) ||
-            (c.fromPin === this.blackPin && c.toPin === this.redPin)
-        );
-
       let rVal = null;
-      if (isDirectlyConnected) {
-        rVal = 0.1;
+      if (Array.isArray(passiveBranches)) {
+        rVal = measureEquivalentResistance(passiveBranches, this.redPin, this.blackPin);
       } else {
-        rVal = this._estimateComponentResistance(this.redPin, this.blackPin, activeModule);
+        // Fallback when called without a solver snapshot
+        const isDirect =
+          this.redPin === this.blackPin ||
+          cables.some(
+            (c) =>
+              (c.fromPin === this.redPin && c.toPin === this.blackPin) ||
+              (c.fromPin === this.blackPin && c.toPin === this.redPin)
+          );
+        rVal = isDirect ? 0.1 : null;
       }
 
-      if (rVal === null || rVal > 2000) {
+      if (rVal === null || rVal > 200000) {
         this.reading = {
           display: 'O.L',
           unit: this.mode === MULTIMETER_MODES.CONTINUITY ? 'Ω' : 'MΩ',
@@ -220,12 +227,14 @@ export class MultimeterEngine {
         return this.reading;
       }
 
-      const isContinuous = rVal < 15.0;
-      let displayStr = rVal.toFixed(rVal < 10 ? 1 : 0);
+      // Real digital multimeters show ~0.1 Ohm minimum lead/contact floor
+      const displayR = rVal < 0.08 ? 0.1 : rVal;
+      const isContinuous = displayR < 15.0;
+      let displayStr = displayR.toFixed(displayR < 10 ? 1 : 0);
       let unitStr = 'Ω';
 
-      if (rVal >= 1000) {
-        displayStr = (rVal / 1000).toFixed(2);
+      if (displayR >= 1000) {
+        displayStr = (displayR / 1000).toFixed(2);
         unitStr = 'kΩ';
       }
 
@@ -240,88 +249,48 @@ export class MultimeterEngine {
     }
 
     // ------------------------------------------------------------------------
-    // MODE 4: DC CURRENT (A_DC) — Series In-line Measurement
+    // MODE 4: DC CURRENT (A_DC) — Real Series Shunt Measurement (R_shunt = 0.02Ω)
     // ------------------------------------------------------------------------
     if (this.mode === MULTIMETER_MODES.A_DC) {
-      // If red probe is at 12V source and black is feeding a load that goes to GND
-      let amp = 0.0;
-      const redAt12V = posSet.has(this.redPin);
-      const blackAt12V = posSet.has(this.blackPin);
+      let current = 0.0;
+      let overload = false;
 
-      if (redAt12V && !blackAt12V) {
-        amp = 1.75; // Typical 21W lamp load current
-      } else if (blackAt12V && !redAt12V) {
-        amp = -1.75;
+      if (Array.isArray(activeBranches)) {
+        const allPins = pinIds || (activeModule?.pins || []).map((p) => p.id);
+        const res = measureSeriesAmmeter({
+          pinIds: allPins,
+          branches: activeBranches,
+          pinA: this.redPin,
+          pinB: this.blackPin,
+          vOc: BATTERY_VOC,
+          rBat: BATTERY_R_INT,
+        });
+        current = Math.abs(res.current) < 0.005 ? 0 : res.current;
+        overload = res.overload;
       }
 
+      if (overload) {
+        this.reading = {
+          display: 'O.L',
+          unit: 'A',
+          overload: true,
+          beeping: false,
+          isNegative: false,
+        };
+        return this.reading;
+      }
+
+      const isNegative = current < 0;
       this.reading = {
-        display: Math.abs(amp).toFixed(2),
+        display: (isNegative ? '-' : '') + Math.abs(current).toFixed(2),
         unit: 'A',
         overload: false,
         beeping: false,
-        isNegative: amp < 0,
+        isNegative,
       };
       return this.reading;
     }
 
     return this.reading;
-  }
-
-  // Lookup nominal component resistance if measuring across its terminals
-  _estimateComponentResistance(pinA, pinB, moduleDef) {
-    if (!moduleDef) return null;
-
-    const norm = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
-    const pair = norm(pinA, pinB);
-
-    // Resistors
-    if (pair === norm('R1_A', 'R1_B')) return 10.0;
-    if (pair === norm('R2_A', 'R2_B')) return 50.0;
-    if (pair === norm('R3_A', 'R3_B')) return 100.0;
-
-    // Lamps
-    if (pair === norm('L5W_POS', 'L5W_NEG')) return 28.8;
-    if (pair === norm('L21W_POS', 'L21W_NEG')) return 6.8;
-    if (pair === norm('H4_LOW', 'H4_GND')) return 2.6;
-    if (pair === norm('H4_HIGH', 'H4_GND')) return 2.4;
-    if (pair === norm('LED_A', 'LED_K')) return 240.0;
-
-    // Actuators
-    if (pair === norm('BUZ_POS', 'BUZ_NEG')) return 150.0;
-    if (pair === norm('MTR_POS', 'MTR_NEG')) return 4.2;
-
-    // AC Components
-    if (pair === norm('MTR_BLW_POS', 'MTR_BLW_GND')) return 1.4;
-    if (pair === norm('CLUTCH_POS', 'CLUTCH_GND')) return 3.8;
-    if (pair === norm('FAN_POS', 'FAN_GND')) return 2.4;
-    if (pair === norm('PS_IN', 'PS_OUT')) return 0.1;
-    if (pair === norm('TH_IN', 'TH_OUT')) return 0.1;
-    if (pair === norm('RES_IN', 'RES_LOW')) return 2.2;
-    if (pair === norm('RES_IN', 'RES_MED')) return 1.2;
-    if (pair === norm('RES_IN', 'RES_HIGH')) return 0.1;
-    if (pair === norm('RES_LOW', 'RES_MED')) return 1.0;
-    if (pair === norm('RES_MED', 'RES_HIGH')) return 1.1;
-
-    // Relays
-    if (
-      pair.includes('85') && pair.includes('86')
-    ) {
-      return 78.0;
-    }
-    if (pair.includes('30') && (pair.includes('87a') || pair.includes('87A'))) return 0.1; // NC contact
-    if (pair.includes('30') && pair.includes('87')) return 9999; // NO contact
-
-    // Fuses
-    if (pair.includes('F1_IN') && pair.includes('F1_OUT')) return 0.1;
-    if (pair.includes('F2_IN') && pair.includes('F2_OUT')) return 0.1;
-    if (pair.includes('F3_IN') && pair.includes('F3_OUT')) return 0.1;
-    if (pair.includes('F4_IN') && pair.includes('F4_OUT')) return 0.1;
-    if (pair.includes('FUSE_BLW_IN') && pair.includes('FUSE_BLW_OUT')) return 0.1;
-    if (pair.includes('FUSE_AC_IN') && pair.includes('FUSE_AC_OUT')) return 0.1;
-
-    // Horn
-    if (pair === norm('HORN_POS', 'HORN_NEG')) return 1.8;
-
-    return null;
   }
 }

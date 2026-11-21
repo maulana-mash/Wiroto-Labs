@@ -18,6 +18,7 @@ test('UI files contain zero Unicode emojis and use pure inline SVG icons + Plus 
     'src/core/cableEngine.js',
     'src/core/modulesData.js',
     'src/core/circuitSolver.js',
+    'src/core/nodalSolver.js',
     'src/core/multimeterEngine.js',
   ];
 

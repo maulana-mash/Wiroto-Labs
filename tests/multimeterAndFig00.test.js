@@ -40,7 +40,7 @@ test('Fig. 00 12V Basic Electricity & Multimeter Lab simulates Ohm law, Buzzer, 
   assert.equal(reading.unit, 'V');
   assert.ok(parseFloat(reading.display) > 11.0);
 
-  // 5. Multimeter Continuity across Fuse 1
+  // 5. Multimeter Continuity across Fuse 1 (de-energized)
   meter.setMode('CONTINUITY');
   meter.attachRedProbe('F1_IN');
   meter.attachBlackProbe('F1_OUT');
@@ -49,7 +49,10 @@ test('Fig. 00 12V Basic Electricity & Multimeter Lab simulates Ohm law, Buzzer, 
   assert.equal(reading.unit, 'Ω');
   assert.equal(reading.beeping, true);
 
-  // 6. Multimeter Ohm across Lamp 21W
+  // 6. Multimeter Ohm across Lamp 21W (with switches OFF to isolate component — standard workshop procedure)
+  solver.setSwitchState('SW_TOGGLE_1', 'OFF');
+  solver.setSwitchState('SW_TOGGLE_2', 'OFF');
+  snap = solver.step(mgr.getCables(), 0.05);
   meter.setMode('OHM');
   meter.attachRedProbe('L21W_POS');
   meter.attachBlackProbe('L21W_NEG');

@@ -5321,28 +5321,30 @@ export class TrainerScene3D {
         const isDimGarage = this.environmentPreset === 'bengkel_mobil';
         const envBoost = isDimGarage ? 1.25 : 1.0;
 
+        const bFactor = state.brightness > 0 ? state.brightness : 1.0;
+
         for (const f of vis.headlampFlares) {
           const sx = f.baseScaleX || 1.8;
           const sy = f.baseScaleY || 1.3;
           if (isHigh) {
             f.mesh.material.color.setHex(0xfffbeb);
-            f.mesh.material.opacity = Math.min(1.0, 0.92 * envBoost);
+            f.mesh.material.opacity = Math.min(1.0, 0.92 * envBoost * bFactor);
             f.mesh.scale.set(sx * 1.42, sy * 1.38, 1);
             f.mesh.position.y = 0.0;
             if (f.beamCone) {
               f.beamCone.material.color.setHex(0xfffbeb);
-              f.beamCone.material.opacity = Math.min(0.62, 0.44 * envBoost);
+              f.beamCone.material.opacity = Math.min(0.62, 0.44 * envBoost * bFactor);
               f.beamCone.scale.set(1.22, 1.18, 1.35);
               f.beamCone.rotation.x = -0.02;
             }
           } else if (isLow) {
             f.mesh.material.color.setHex(0xfde68a);
-            f.mesh.material.opacity = Math.min(0.95, 0.68 * envBoost);
+            f.mesh.material.opacity = Math.min(0.95, 0.68 * envBoost * bFactor);
             f.mesh.scale.set(sx * 1.02, sy * 0.94, 1);
             f.mesh.position.y = -0.05;
             if (f.beamCone) {
               f.beamCone.material.color.setHex(0xfde68a);
-              f.beamCone.material.opacity = Math.min(0.45, 0.28 * envBoost);
+              f.beamCone.material.opacity = Math.min(0.45, 0.28 * envBoost * bFactor);
               f.beamCone.scale.set(0.96, 0.78, 0.82);
               f.beamCone.rotation.x = 0.16; // Realistic downward low-beam dip
             }
@@ -5356,6 +5358,7 @@ export class TrainerScene3D {
       if (vis.glowSprites && vis.glowSprites.length > 0) {
         const isDimGarage = this.environmentPreset === 'bengkel_mobil';
         const envBoost = isDimGarage ? 1.22 : 1.0;
+        const bFactor = state.brightness > 0 ? state.brightness : 1.0;
         for (const g of vis.glowSprites) {
           let lit = Boolean(state.energized);
           if (state.lowBeam !== undefined || state.highBeam !== undefined) {
@@ -5375,10 +5378,11 @@ export class TrainerScene3D {
           } else if (state.lhOn !== undefined || state.rhOn !== undefined) {
             lit = Boolean(state.rhOn);
           }
-          g.sprite.material.opacity = lit ? Math.min(1.0, (g.maxOpacity || 0.75) * envBoost) : 0;
+          g.sprite.material.opacity = lit ? Math.min(1.0, (g.maxOpacity || 0.75) * envBoost * bFactor) : 0;
         }
       }
 
+      const bFactorMesh = state.brightness > 0 ? state.brightness : 1.0;
       for (const item of vis.emissiveMeshes) {
         let lit = Boolean(state.energized);
         let activeHex = item.color;
@@ -5415,46 +5419,40 @@ export class TrainerScene3D {
         const idleHex = item.idleColor ?? 0x475569;
         item.mesh.material.color.setHex(lit ? activeHex : idleHex);
         item.mesh.material.emissive.setHex(lit ? activeHex : 0x000000);
-        item.mesh.material.emissiveIntensity = lit ? intensity : 0;
+        item.mesh.material.emissiveIntensity = lit ? intensity * bFactorMesh : 0;
       }
     }
 
     if (this.auxVisuals) {
       const states = snapshot.componentStates || {};
+      const hasIndCluster = Boolean(states.IND_CLUSTER);
       if (this.auxVisuals.licenceLens) {
-        const licenceLit = Boolean(
-          states.GND_BUS_1?.energized ||
-            states.LICENCE_LAMP?.energized ||
-            (states.TAIL_LH?.tailOn && states.GND_BUS_1?.energized)
-        );
+        const licState = states.GND_BUS_1 || states.LICENCE_LAMP;
+        const licenceLit = Boolean(licState?.energized);
+        const licBright = licState?.brightness > 0 ? licState.brightness : 1.0;
         this.auxVisuals.licenceLens.material.color.setHex(licenceLit ? 0xfef08a : 0xcbd5e1);
         this.auxVisuals.licenceLens.material.emissive.setHex(licenceLit ? 0xfef08a : 0x000000);
-        this.auxVisuals.licenceLens.material.emissiveIntensity = licenceLit ? 1.15 : 0;
+        this.auxVisuals.licenceLens.material.emissiveIntensity = licenceLit ? 1.15 * licBright : 0;
         if (this.auxVisuals.licenceGlow) {
-          this.auxVisuals.licenceGlow.material.opacity = licenceLit ? 0.68 : 0;
+          this.auxVisuals.licenceGlow.material.opacity = licenceLit ? 0.68 * licBright : 0;
         }
       }
       if (this.auxVisuals.pilotRed) {
-        const tailOrIgnOn = Boolean(
-          states.IND_CLUSTER?.tailPilot ||
-            states.TAIL_LH?.tailOn ||
-            (snapshot.boardPowered && states.IGN_SW?.switchState === 'IG')
-        );
+        const tailPilotOn = hasIndCluster
+          ? Boolean(states.IND_CLUSTER?.tailPilot)
+          : Boolean(states.TAIL_LH?.tailOn);
         const m = this.auxVisuals.pilotRed.material;
-        m.color.setHex(tailOrIgnOn ? 0x22c55e : 0x14532d);
-        m.emissive.setHex(tailOrIgnOn ? 0x22c55e : 0x000000);
-        m.emissiveIntensity = tailOrIgnOn ? 1.25 : 0;
+        m.color.setHex(tailPilotOn ? 0x22c55e : 0x14532d);
+        m.emissive.setHex(tailPilotOn ? 0x22c55e : 0x000000);
+        m.emissiveIntensity = tailPilotOn ? 1.25 : 0;
         if (this.auxVisuals.pilotRedGlow) {
-          this.auxVisuals.pilotRedGlow.material.opacity = tailOrIgnOn ? 0.72 : 0;
+          this.auxVisuals.pilotRedGlow.material.opacity = tailPilotOn ? 0.72 : 0;
         }
       }
       if (this.auxVisuals.pilotAmber) {
-        const turnOn = Boolean(
-          states.IND_CLUSTER?.turnPilot ||
-            states.TURN_LAMPS?.lhOn ||
-            states.TURN_LAMPS?.rhOn ||
-            states.SIGN_FRONT_LH?.energized
-        );
+        const turnOn = hasIndCluster
+          ? Boolean(states.IND_CLUSTER?.turnPilot)
+          : Boolean(states.TURN_LAMPS?.lhOn || states.TURN_LAMPS?.rhOn || states.SIGN_FRONT_LH?.energized);
         const m = this.auxVisuals.pilotAmber.material;
         m.color.setHex(turnOn ? 0xf59e0b : 0x78350f);
         m.emissive.setHex(turnOn ? 0xf59e0b : 0x000000);
@@ -5464,9 +5462,9 @@ export class TrainerScene3D {
         }
       }
       if (this.auxVisuals.pilotBlue) {
-        const hiOn = Boolean(
-          states.IND_CLUSTER?.highPilot || states.HL_MAIN?.highBeam || states.HL_RH?.highBeam
-        );
+        const hiOn = hasIndCluster
+          ? Boolean(states.IND_CLUSTER?.highPilot)
+          : Boolean(states.HL_MAIN?.highBeam || states.HL_RH?.highBeam);
         const m = this.auxVisuals.pilotBlue.material;
         m.color.setHex(hiOn ? 0x3b82f6 : 0x1e3a8a);
         m.emissive.setHex(hiOn ? 0x3b82f6 : 0x000000);
