@@ -99,7 +99,14 @@ export class TrainerScene3D {
     this.cableMeshes = new Map(); // cableId -> Group
     this.lastCables = [];
     this.lastPinStackGetter = null;
-    this.interactiveTargets = []; // Meshes for raycasting
+    this.interactiveTargets = []; // Full meshes for click/cut raycasting
+    this.hoverTargets = []; // Lightweight pin hitSpheres + switches only (excludes 55+ cable TubeGeometries!)
+    this.needsRender = true;
+    this._lastCamPos = new THREE.Vector3();
+    this._lastCamTarget = new THREE.Vector3();
+    this._lastSyncedSolveVersion = -1;
+    this._lastSyncedRefrigKey = '';
+    this.maxPixelRatio = 1.5;
 
     this.labelsVisible = true;
     this.explodedView = false;
@@ -133,12 +140,23 @@ export class TrainerScene3D {
     this.camera.up.set(0, 1, 0);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    // Auto-detect software renderer (SwiftShader/llvmpipe) to keep classroom/low-end PCs smooth
+    let isSoftwareGpu = false;
+    try {
+      const gl = this.renderer.getContext();
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      const rStr = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+      isSoftwareGpu = /swiftshader|llvmpipe|software|basic render/i.test(String(rStr || ''));
+    } catch {
+      isSoftwareGpu = false;
+    }
+    this.maxPixelRatio = isSoftwareGpu ? 1.0 : 1.5;
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.maxPixelRatio));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.80;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = !isSoftwareGpu;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.needsUpdate = true;
@@ -175,6 +193,7 @@ export class TrainerScene3D {
       MIDDLE: THREE.MOUSE.ROTATE,
       RIGHT: null,
     };
+    this.controls.addEventListener('change', () => this.requestRender());
 
     // Balanced 100% PBR workshop lighting (calibrated per Suasana preset to prevent eye strain)
     this.ambientLight = new THREE.AmbientLight(0xfffaf0, 0.20);
@@ -186,8 +205,8 @@ export class TrainerScene3D {
     this.keyLight = new THREE.DirectionalLight(0xfff2dc, 0.85);
     this.keyLight.position.set(10, 16, 22);
     this.keyLight.castShadow = true;
-    this.keyLight.shadow.mapSize.width = 2048;
-    this.keyLight.shadow.mapSize.height = 2048;
+    this.keyLight.shadow.mapSize.width = 1024;
+    this.keyLight.shadow.mapSize.height = 1024;
     this.keyLight.shadow.camera.near = 2;
     this.keyLight.shadow.camera.far = 65;
     const d = 22;
@@ -247,9 +266,14 @@ export class TrainerScene3D {
   // 4 SELECTABLE 3D ROOM / ENVIRONMENT BACKGROUNDS + SOLID GROUND FLOOR
   // ============================================================================
 
+  requestRender() {
+    this.needsRender = true;
+  }
+
   setEnvironmentPreset(presetId) {
     this.environmentPreset = presetId || 'kelas_tkr';
     this._buildEnvironment(this.environmentPreset);
+    this.requestRender();
   }
 
   _createFloorTileTexture(style = 'tkr') {
@@ -2161,6 +2185,10 @@ export class TrainerScene3D {
     this.componentGroups.clear();
     this.componentVisuals.clear();
     this.interactiveTargets = [];
+    this.hoverTargets = [];
+    this.instancedPinsGroup = null;
+    this._lastSyncedSolveVersion = -1;
+    this._lastSyncedRefrigKey = '';
     this.clearPreview();
 
     while (this.componentsLayer.children.length > 0) {
@@ -2170,7 +2198,11 @@ export class TrainerScene3D {
       this.pinsLayer.remove(this.pinsLayer.children[0]);
     }
     while (this.cablesLayer.children.length > 0) {
-      this.cablesLayer.remove(this.cablesLayer.children[0]);
+      const oldChild = this.cablesLayer.children[0];
+      oldChild.traverse?.((c) => {
+        if (c.isMesh && c.userData?.isCableTube && c.geometry) c.geometry.dispose();
+      });
+      this.cablesLayer.remove(oldChild);
     }
     this.labelOverlay.innerHTML = '';
 
@@ -2184,16 +2216,80 @@ export class TrainerScene3D {
       this.componentGroups.set(comp.id, compGroup);
     }
 
-    // Build 3D pins (compact banana sockets & surface-mounted pin tags)
+    // Build 3D pins (InstancedMesh for banana socket collars & brass bores cuts ~150 draw calls!)
+    const instancedBananaPins = [];
     for (const pin of moduleDef.pins || []) {
-      const pinMesh = this._createPinSocketMesh(pin);
+      const pinMesh = this._createPinSocketMesh(pin, true);
       this.pinsLayer.add(pinMesh);
       this.pinMeshes.set(pin.id, pinMesh);
+      if (pin.terminalType !== 'battery_post') {
+        instancedBananaPins.push(pin);
+      }
     }
+    if (instancedBananaPins.length > 0) {
+      this.instancedPinsGroup = this._buildInstancedPinSockets(instancedBananaPins);
+      this.instancedPinsGroup.position.z = this.explodeProgress * 1.45;
+      this.pinsLayer.add(this.instancedPinsGroup);
+    }
+
+    // Snapshot lightweight hover targets (pins + 3D switches only, never 55+ cable TubeGeometries!)
+    this.hoverTargets = [...this.interactiveTargets];
 
     this._buildTrainerAuxiliaryHardware(moduleDef);
     this.setCameraPreset('front');
     this.renderer.shadowMap.needsUpdate = true;
+    this.requestRender();
+  }
+
+  _buildInstancedPinSockets(bananaPins) {
+    const group = new THREE.Group();
+    const dummy = new THREE.Object3D();
+
+    // Group collars by color key (max 4 InstancedMeshes: red, black, yellow, blue)
+    const byColor = new Map();
+    for (const pin of bananaPins) {
+      const key = pin.color || 'red';
+      if (!byColor.has(key)) byColor.set(key, []);
+      byColor.get(key).push(pin);
+    }
+
+    for (const [colorKey, pins] of byColor.entries()) {
+      const mat = this._pinMaterials[colorKey] || this._pinMaterials.red;
+      const inst = new THREE.InstancedMesh(this._pinGeometries.socketCollarGeo, mat, pins.length);
+      for (let i = 0; i < pins.length; i++) {
+        const p = pins[i];
+        const tiltX = p.tiltX || 0;
+        const ny = -Math.sin(tiltX);
+        const nz = Math.cos(tiltX);
+        dummy.position.set(p.pos[0], p.pos[1] + ny * 0.12, p.pos[2] + nz * 0.12);
+        dummy.rotation.set(tiltX, 0, 0);
+        dummy.updateMatrix();
+        inst.setMatrixAt(i, dummy.matrix);
+      }
+      inst.instanceMatrix.needsUpdate = true;
+      group.add(inst);
+    }
+
+    // Single InstancedMesh for all brass bores across the entire board
+    const boreInst = new THREE.InstancedMesh(
+      this._pinGeometries.socketBoreGeo,
+      this._pinMaterials.brassBore,
+      bananaPins.length
+    );
+    for (let i = 0; i < bananaPins.length; i++) {
+      const p = bananaPins[i];
+      const tiltX = p.tiltX || 0;
+      const ny = -Math.sin(tiltX);
+      const nz = Math.cos(tiltX);
+      dummy.position.set(p.pos[0], p.pos[1] + ny * 0.13, p.pos[2] + nz * 0.13);
+      dummy.rotation.set(tiltX, 0, 0);
+      dummy.updateMatrix();
+      boreInst.setMatrixAt(i, dummy.matrix);
+    }
+    boreInst.instanceMatrix.needsUpdate = true;
+    group.add(boreInst);
+
+    return group;
   }
 
   _buildTrainerAuxiliaryHardware(moduleDef) {
@@ -4468,7 +4564,7 @@ export class TrainerScene3D {
     return group;
   }
 
-  _createPinSocketMesh(pin) {
+  _createPinSocketMesh(pin, useInstanced = false) {
     const group = new THREE.Group();
     const [x, y, z] = pin.pos;
     group.position.set(x, y, z);
@@ -4514,8 +4610,8 @@ export class TrainerScene3D {
       };
     }
 
-    let collarMesh;
-    let boreMesh;
+    let collarMesh = null;
+    let boreMesh = null;
     let hitMesh;
 
     if (isBatteryPost) {
@@ -4535,16 +4631,18 @@ export class TrainerScene3D {
       hitMesh.userData = { pinId: pin.id, pinData: pin };
       group.add(hitMesh);
     } else {
-      const collarMat = this._pinMaterials[collarColorKey] || this._pinMaterials.red;
-      collarMesh = new THREE.Mesh(this._pinGeometries.socketCollarGeo, collarMat);
-      collarMesh.position.set(0, 0, 0.12);
-      collarMesh.userData = { pinId: pin.id, pinData: pin };
-      group.add(collarMesh);
+      if (!useInstanced) {
+        const collarMat = this._pinMaterials[collarColorKey] || this._pinMaterials.red;
+        collarMesh = new THREE.Mesh(this._pinGeometries.socketCollarGeo, collarMat);
+        collarMesh.position.set(0, 0, 0.12);
+        collarMesh.userData = { pinId: pin.id, pinData: pin };
+        group.add(collarMesh);
 
-      boreMesh = new THREE.Mesh(this._pinGeometries.socketBoreGeo, this._pinMaterials.brassBore);
-      boreMesh.position.set(0, 0, 0.13);
-      boreMesh.userData = { pinId: pin.id, pinData: pin };
-      group.add(boreMesh);
+        boreMesh = new THREE.Mesh(this._pinGeometries.socketBoreGeo, this._pinMaterials.brassBore);
+        boreMesh.position.set(0, 0, 0.13);
+        boreMesh.userData = { pinId: pin.id, pinData: pin };
+        group.add(boreMesh);
+      }
 
       hitMesh = new THREE.Mesh(this._pinGeometries.socketHitGeo, this._pinMaterials.invisibleHit);
       hitMesh.position.set(0, 0, 0.2);
@@ -4557,15 +4655,18 @@ export class TrainerScene3D {
     group.add(tagMesh);
     this.pinSurfaceTags.set(pin.id, tagMesh);
 
-    // Highly optimized raycast target list: hitMesh is the primary interaction target
-    this.interactiveTargets.push(hitMesh, collarMesh);
+    // Highly optimized raycast target list: single hitMesh sphere per banana pin
+    if (collarMesh) {
+      this.interactiveTargets.push(hitMesh, collarMesh);
+    } else {
+      this.interactiveTargets.push(hitMesh);
+    }
 
     group.userData = { pinId: pin.id, pinData: pin, collarMesh, hitMesh, tagMesh };
     return group;
   }
 
-  _createPlugMesh(pin, stackIndex, color, category, cableId, explodeOffsetZ = 0) {
-    const plugGroup = new THREE.Group();
+  _createPlugMesh(pin, stackIndex, color, category, cableId, explodeOffsetZ = 0, instancedPlugList = null) {
     const [px, py, pz] = pin.pos;
     const hex = WIRE_COLOR_HEX[color] || 0xd93829;
 
@@ -4590,10 +4691,11 @@ export class TrainerScene3D {
     }
 
     if (category === 'alligator' && pin.terminalType === 'battery_post') {
+      const plugGroup = new THREE.Group();
       const yOffset = 0.32 + stackIndex * 0.22;
       plugGroup.position.set(px, py + yOffset, pz);
       const jaw = new THREE.Mesh(this._plugGeometries.jawGeo, bodyMat);
-      jaw.userData = { pinId: pin.id, pinData: pin, cableId };
+      jaw.userData = { pinId: pin.id, pinData: pin, cableId, isCablePart: true };
       plugGroup.add(jaw);
       this.interactiveTargets.push(jaw);
 
@@ -4607,21 +4709,43 @@ export class TrainerScene3D {
     const tiltX = pin.tiltX || 0;
     const normal = new THREE.Vector3(0, -Math.sin(tiltX), Math.cos(tiltX)).normalize();
     const distOut = 0.22 + stackIndex * PLUG_STACK_STEP;
-    plugGroup.position.set(
-      px + normal.x * distOut,
-      py + normal.y * distOut,
-      pz + normal.z * distOut + explodeOffsetZ
-    );
+    const posX = px + normal.x * distOut;
+    const posY = py + normal.y * distOut;
+    const posZ = pz + normal.z * distOut + explodeOffsetZ;
+
+    if (instancedPlugList) {
+      instancedPlugList.push({
+        x: posX,
+        y: posY,
+        z: posZ,
+        tiltX,
+        hex,
+        cableId,
+        pin,
+      });
+      return {
+        mesh: null,
+        tipWorldPos: new THREE.Vector3(
+          px + normal.x * (distOut + 0.085),
+          py + normal.y * (distOut + 0.085),
+          pz + normal.z * (distOut + 0.085) + explodeOffsetZ
+        ),
+        normal,
+      };
+    }
+
+    const plugGroup = new THREE.Group();
+    plugGroup.position.set(posX, posY, posZ);
     if (tiltX) {
       plugGroup.rotation.x = tiltX;
     }
 
     const body = new THREE.Mesh(this._plugGeometries.bodyGeo, bodyMat);
-    body.userData = { pinId: pin.id, pinData: pin, cableId };
+    body.userData = { pinId: pin.id, pinData: pin, cableId, isCablePart: true };
     plugGroup.add(body);
 
     const tip = new THREE.Mesh(this._plugGeometries.tipGeo, this._plugMaterials.tipGold);
-    tip.userData = { pinId: pin.id, pinData: pin, cableId };
+    tip.userData = { pinId: pin.id, pinData: pin, cableId, isCablePart: true };
     plugGroup.add(tip);
 
     this.interactiveTargets.push(body, tip);
@@ -4972,6 +5096,7 @@ export class TrainerScene3D {
 
     const pinMap = new Map((this.module?.pins || []).map((p) => [p.id, p]));
     const explodeZ = this.explodeProgress * 1.45;
+    const instancedPlugs = [];
 
     for (const cable of cables) {
       const pinA = pinMap.get(cable.fromPin);
@@ -4985,7 +5110,8 @@ export class TrainerScene3D {
         cable.color,
         cable.category,
         cable.id,
-        pinA.terminalType === 'battery_post' ? 0 : explodeZ
+        pinA.terminalType === 'battery_post' ? 0 : explodeZ,
+        instancedPlugs
       );
       const plugB = this._createPlugMesh(
         pinB,
@@ -4993,18 +5119,22 @@ export class TrainerScene3D {
         cable.color,
         cable.category,
         cable.id,
-        pinB.terminalType === 'battery_post' ? 0 : explodeZ
+        pinB.terminalType === 'battery_post' ? 0 : explodeZ,
+        instancedPlugs
       );
 
-      plugA.mesh.traverse((child) => {
-        if (child.isMesh) child.userData.isCablePart = true;
-      });
-      plugB.mesh.traverse((child) => {
-        if (child.isMesh) child.userData.isCablePart = true;
-      });
-
-      cableGroup.add(plugA.mesh);
-      cableGroup.add(plugB.mesh);
+      if (plugA.mesh) {
+        plugA.mesh.traverse((child) => {
+          if (child.isMesh) child.userData.isCablePart = true;
+        });
+        cableGroup.add(plugA.mesh);
+      }
+      if (plugB.mesh) {
+        plugB.mesh.traverse((child) => {
+          if (child.isMesh) child.userData.isCablePart = true;
+        });
+        cableGroup.add(plugB.mesh);
+      }
 
       const curve = this._buildCatenaryCurve(
         plugA.tipWorldPos,
@@ -5038,6 +5168,52 @@ export class TrainerScene3D {
       this.cableMeshes.set(cable.id, cableGroup);
     }
 
+    // Batch all banana plug bodies (per color) & gold tips into InstancedMeshes (~220 draw calls -> 3!)
+    if (instancedPlugs.length > 0 && this._plugGeometries && this._plugMaterials) {
+      const dummy = new THREE.Object3D();
+      const byHex = new Map();
+      for (const item of instancedPlugs) {
+        if (!byHex.has(item.hex)) byHex.set(item.hex, []);
+        byHex.get(item.hex).push(item);
+      }
+
+      for (const [hex, items] of byHex.entries()) {
+        const mat = this._plugMaterials.byHex.get(hex);
+        const bodyInst = new THREE.InstancedMesh(this._plugGeometries.bodyGeo, mat, items.length);
+        const cableIds = new Array(items.length);
+        const pins = new Array(items.length);
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i];
+          dummy.position.set(it.x, it.y, it.z);
+          dummy.rotation.set(it.tiltX || 0, 0, 0);
+          dummy.updateMatrix();
+          bodyInst.setMatrixAt(i, dummy.matrix);
+          cableIds[i] = it.cableId;
+          pins[i] = it.pin;
+        }
+        bodyInst.instanceMatrix.needsUpdate = true;
+        bodyInst.userData = { isCablePart: true, instanceCableIds: cableIds, instancePins: pins };
+        this.cablesLayer.add(bodyInst);
+        this.interactiveTargets.push(bodyInst);
+      }
+
+      const tipInst = new THREE.InstancedMesh(
+        this._plugGeometries.tipGeo,
+        this._plugMaterials.tipGold,
+        instancedPlugs.length
+      );
+      for (let i = 0; i < instancedPlugs.length; i++) {
+        const it = instancedPlugs[i];
+        dummy.position.set(it.x, it.y, it.z);
+        dummy.rotation.set(it.tiltX || 0, 0, 0);
+        dummy.updateMatrix();
+        tipInst.setMatrixAt(i, dummy.matrix);
+      }
+      tipInst.instanceMatrix.needsUpdate = true;
+      tipInst.userData = { isCablePart: true };
+      this.cablesLayer.add(tipInst);
+    }
+
     // Update 3D surface-mounted pin tags with stack count badge (e.g. "F4- ×3")
     for (const pin of this.module?.pins || []) {
       const count = pinStackGetter ? pinStackGetter(pin.id) : 0;
@@ -5055,6 +5231,7 @@ export class TrainerScene3D {
       }
     }
     this.renderer.shadowMap.needsUpdate = true;
+    this.requestRender();
   }
 
   syncMultimeter(dmmEngine) {
@@ -5068,7 +5245,11 @@ export class TrainerScene3D {
         CONTINUITY: -1.85,
         A_DC: 0.65,
       };
-      this.multimeterDialMesh.rotation.z = modeAngles[dmmEngine?.mode] || 0;
+      const nextAngle = modeAngles[dmmEngine?.mode] || 0;
+      if (this.multimeterDialMesh.rotation.z !== nextAngle) {
+        this.multimeterDialMesh.rotation.z = nextAngle;
+        this.requestRender();
+      }
     }
 
     if (this.multimeterLcdMesh) {
@@ -5077,12 +5258,14 @@ export class TrainerScene3D {
       if (tex && this.multimeterLcdMesh.material.map !== tex) {
         this.multimeterLcdMesh.material.map = tex;
         this.multimeterLcdMesh.material.needsUpdate = true;
+        this.requestRender();
       }
     }
 
     const dmmProbesKey = `${dmmEngine?.mode}_${dmmEngine?.redPin}_${dmmEngine?.blackPin}_${this.explodeProgress > 0.02 ? 'exp' : 'norm'}`;
     if (this._lastDmmProbesKey !== dmmProbesKey) {
       this._lastDmmProbesKey = dmmProbesKey;
+      this.requestRender();
       while (this.multimeterProbesGroup.children.length > 0) {
         const c = this.multimeterProbesGroup.children[0];
         this.multimeterProbesGroup.remove(c);
@@ -5219,13 +5402,20 @@ export class TrainerScene3D {
     });
     const previewMesh = new THREE.Mesh(previewGeo, previewMat);
     this.previewGroup.add(previewMesh);
+    this.requestRender();
 
     return validation;
   }
 
   clearPreview() {
-    while (this.previewGroup.children.length > 0) {
-      this.previewGroup.remove(this.previewGroup.children[0]);
+    if (this.previewGroup.children.length > 0) {
+      while (this.previewGroup.children.length > 0) {
+        const c = this.previewGroup.children[0];
+        if (c.geometry) c.geometry.dispose();
+        if (c.material) c.material.dispose();
+        this.previewGroup.remove(c);
+      }
+      this.requestRender();
     }
   }
 
@@ -5241,10 +5431,27 @@ export class TrainerScene3D {
         tagMesh.material.color.setHex(pinId === selectedPinId ? 0xfde047 : 0xffffff);
       }
     }
+    this.requestRender();
   }
 
   syncSimulation(snapshot) {
     if (!snapshot) return;
+    const sv = snapshot.solveVersion ?? -1;
+    const r = snapshot.refrigeration;
+    const refrigKey = r
+      ? `${r.lowPressurePsi.toFixed(1)}_${r.highPressurePsi.toFixed(1)}_${r.t3VentDischarge.toFixed(1)}_${r.blowerSpeed}_${r.compressorRpm}_${r.fanRunning ? 1 : 0}`
+      : '';
+    if (
+      sv !== -1 &&
+      sv === this._lastSyncedSolveVersion &&
+      refrigKey === this._lastSyncedRefrigKey &&
+      (!snapshot.shortCircuitEvents || snapshot.shortCircuitEvents.length === 0)
+    ) {
+      return;
+    }
+    this._lastSyncedSolveVersion = sv;
+    this._lastSyncedRefrigKey = refrigKey;
+    this.requestRender();
 
     for (const [compId, state] of Object.entries(snapshot.componentStates || {})) {
       const vis = this.componentVisuals.get(compId);
@@ -5565,6 +5772,7 @@ export class TrainerScene3D {
         life: 0.55,
       });
     }
+    this.requestRender();
   }
 
   setCameraPreset(presetName) {
@@ -5595,6 +5803,7 @@ export class TrainerScene3D {
       }
     }
     this.controls.update();
+    this.requestRender();
   }
 
   setBoardTheme(hexString) {
@@ -5603,6 +5812,7 @@ export class TrainerScene3D {
     if (this.boardMeshMaterial) {
       this.boardMeshMaterial.color.setHex(hex);
     }
+    this.requestRender();
   }
 
   setLabelsVisible(visible) {
@@ -5610,10 +5820,12 @@ export class TrainerScene3D {
     for (const tagMesh of this.pinSurfaceTags.values()) {
       tagMesh.visible = this.labelsVisible;
     }
+    this.requestRender();
   }
 
   setExplodedView(exploded) {
     this.explodedView = Boolean(exploded);
+    this.requestRender();
   }
 
   setWobbleAmount(value) {
@@ -5652,7 +5864,7 @@ export class TrainerScene3D {
         this.pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
         this.pointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
         this.raycaster.setFromCamera(this.pointerNDC, this.camera);
-        const hits = this.raycaster.intersectObjects(this.interactiveTargets, false);
+        const hits = this.raycaster.intersectObjects(this.hoverTargets, false);
         const switchHit = hits.find((h) => h.object.userData?.interactComponentId);
         if (switchHit) {
           const compId = switchHit.object.userData.interactComponentId;
@@ -5682,8 +5894,9 @@ export class TrainerScene3D {
       this.pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       this.pointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
+      // Fast hover raycast against lightweight pin spheres & 3D switches ONLY (skips 55+ cable TubeGeometries!)
       this.raycaster.setFromCamera(this.pointerNDC, this.camera);
-      const hits = this.raycaster.intersectObjects(this.interactiveTargets, false);
+      const hits = this.raycaster.intersectObjects(this.hoverTargets, false);
       const hitPin = hits.find((h) => h.object.userData?.pinData)?.object.userData.pinData || null;
 
       const planeIntersect = new THREE.Vector3();
@@ -5721,13 +5934,24 @@ export class TrainerScene3D {
       this.pointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
       this.raycaster.setFromCamera(this.pointerNDC, this.camera);
-      const hits = this.raycaster.intersectObjects(this.interactiveTargets, false);
+      const targets = e.button === 2 ? this.interactiveTargets : this.hoverTargets;
+      const hits = this.raycaster.intersectObjects(targets, false);
 
       // RIGHT CLICK (button === 2): Cut / Delete cable or cancel active wire preview
       if (e.button === 2) {
-        const cableHit = hits.find((h) => h.object.userData?.cableId);
-        if (cableHit && this.onCableClick) {
-          this.onCableClick(cableHit.object.userData.cableId);
+        let hitCableId = null;
+        for (const h of hits) {
+          if (h.object.userData?.cableId) {
+            hitCableId = h.object.userData.cableId;
+            break;
+          }
+          if (h.object.userData?.instanceCableIds && h.instanceId !== undefined) {
+            hitCableId = h.object.userData.instanceCableIds[h.instanceId];
+            break;
+          }
+        }
+        if (hitCableId && this.onCableClick) {
+          this.onCableClick(hitCableId);
         } else if (this.onRightClickCancel) {
           this.onRightClickCancel();
         }
@@ -5759,7 +5983,8 @@ export class TrainerScene3D {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.maxPixelRatio));
+    this.requestRender();
   }
 
   renderFrame(deltaSeconds = 0.016) {
@@ -5774,10 +5999,23 @@ export class TrainerScene3D {
       this.controls.target.y = FLOOR_Y + 1.2;
     }
 
+    // Detect camera movement or OrbitControls damping momentum
+    if (
+      this.camera.position.distanceToSquared(this._lastCamPos) > 1e-7 ||
+      this.controls.target.distanceToSquared(this._lastCamTarget) > 1e-7
+    ) {
+      this._lastCamPos.copy(this.camera.position);
+      this._lastCamTarget.copy(this.controls.target);
+      this.needsRender = true;
+    }
+
+    let hasActiveAnim = false;
+
     // Smooth exploded view interpolation — only mutate 100+ object matrices when actively transitioning
     const targetExplode = this.explodedView ? 1 : 0;
     const explodeDelta = Math.abs(targetExplode - this.explodeProgress);
     if (explodeDelta > 0.0005) {
+      hasActiveAnim = true;
       this.explodeProgress += (targetExplode - this.explodeProgress) * Math.min(1, deltaSeconds * 9);
       if (Math.abs(targetExplode - this.explodeProgress) <= 0.0005) {
         this.explodeProgress = targetExplode;
@@ -5795,23 +6033,33 @@ export class TrainerScene3D {
         pinGroup.position.y = pData.pos[1];
         pinGroup.position.z = pData.pos[2] + lift;
       }
+
+      if (this.instancedPinsGroup) {
+        this.instancedPinsGroup.position.z = lift;
+      }
     }
 
     // Rebuild cable curves when explodeProgress transitions so cables route underneath lifted components
     if (Math.abs(this.explodeProgress - this.lastSyncedExplode) > 0.015) {
+      hasActiveAnim = true;
       this.syncCables(this.lastCables, this.lastPinStackGetter);
     }
 
     // High-frequency acoustic vibration on horn diaphragm when energized
     for (const [, vis] of this.componentVisuals.entries()) {
       if (vis.hornDiscMesh) {
-        vis.hornDiscMesh.position.z = vis.isHornEnergized
-          ? 0.3 + Math.sin(this.clockTime * 95) * 0.03
-          : 0.3;
+        if (vis.isHornEnergized) {
+          vis.hornDiscMesh.position.z = 0.3 + Math.sin(this.clockTime * 95) * 0.03;
+          hasActiveAnim = true;
+        } else if (vis.hornDiscMesh.position.z !== 0.3) {
+          vis.hornDiscMesh.position.z = 0.3;
+          this.needsRender = true;
+        }
       }
       if (vis.isMotor && vis.actuatorMesh) {
         if (vis.isMotorRunning) {
           vis.actuatorMesh.rotation.x += deltaSeconds * 28;
+          hasActiveAnim = true;
         }
       }
       if (vis.isBuzzer && vis.buzzerWave) {
@@ -5820,8 +6068,10 @@ export class TrainerScene3D {
           const waveScale = 1.0 + wavePhase * 0.45;
           vis.buzzerWave.scale.set(waveScale, waveScale, 1);
           vis.buzzerWave.material.opacity = (1 - wavePhase) * 0.85;
-        } else {
+          hasActiveAnim = true;
+        } else if (vis.buzzerWave.material.opacity !== 0) {
           vis.buzzerWave.material.opacity = 0;
+          this.needsRender = true;
         }
       }
       if (vis.airStreamLines && vis.airStreamLines.length > 0) {
@@ -5833,10 +6083,17 @@ export class TrainerScene3D {
 
         for (let idx = 0; idx < vis.airStreamLines.length; idx++) {
           const item = vis.airStreamLines[idx];
-          item.line.material.opacity = THREE.MathUtils.lerp(item.line.material.opacity, targetOpacity, 0.15);
+          const prevOp = item.line.material.opacity;
+          if (Math.abs(prevOp - targetOpacity) > 0.01) {
+            item.line.material.opacity = THREE.MathUtils.lerp(prevOp, targetOpacity, 0.15);
+            hasActiveAnim = true;
+          } else {
+            item.line.material.opacity = targetOpacity;
+          }
           item.line.visible = item.line.material.opacity > 0.02;
 
           if (item.line.visible && speed > 0) {
+            hasActiveAnim = true;
             const posAttr = item.line.geometry.getAttribute('position');
             const arr = posAttr.array;
             const N = item.segCount;
@@ -5844,7 +6101,6 @@ export class TrainerScene3D {
             for (let k = 0; k < N; k++) {
               const tNorm = k / (N - 1);
               const curZ = item.baseZ + tNorm * travelLen;
-              // Undulating vertically up and down in Y with traveling wave
               const waveY = Math.sin(this.clockTime * waveFreq - tNorm * 7.0 + item.phaseOffset) * (waveAmp * tNorm);
               const flutterX = Math.cos(this.clockTime * (waveFreq * 0.6) + tNorm * 3.5 + item.phaseOffset) * (0.02 * tNorm);
 
@@ -5858,14 +6114,17 @@ export class TrainerScene3D {
       }
       if (vis.isFan && vis.fanBlades && this.acIsFanRunning) {
         vis.fanBlades.rotation.z += deltaSeconds * 30;
+        hasActiveAnim = true;
       }
       if (vis.isClutch && vis.clutchDisc && this.acIsClutchEngaged) {
         vis.clutchDisc.rotation.z += deltaSeconds * 25;
+        hasActiveAnim = true;
       }
     }
 
     // AC Mechanical Drive Animations (lower shelf motor & compressor pulleys facing +Z)
     if (this.acCompressorRpm > 0 && this.acMotorPulley) {
+      hasActiveAnim = true;
       const rotSpeed = deltaSeconds * (this.acCompressorRpm * 0.012);
       this.acMotorPulley.rotation.z -= rotSpeed;
       if (this.acCompressorPulley) this.acCompressorPulley.rotation.z -= rotSpeed;
@@ -5875,22 +6134,34 @@ export class TrainerScene3D {
     }
 
     if (this.acIsFanRunning && this.acCondenserFan) {
+      hasActiveAnim = true;
       this.acCondenserFan.rotation.z += deltaSeconds * 35;
     }
 
     // Update short-circuit spark particles
-    for (let i = this.sparkParticles.length - 1; i >= 0; i--) {
-      const p = this.sparkParticles[i];
-      p.life -= deltaSeconds;
-      if (p.life <= 0) {
-        this.effectsLayer.remove(p.mesh);
-        this.sparkParticles.splice(i, 1);
-      } else {
-        p.mesh.position.addScaledVector(p.vel, deltaSeconds);
-        p.vel.y -= 9.8 * deltaSeconds;
+    if (this.sparkParticles.length > 0) {
+      hasActiveAnim = true;
+      for (let i = this.sparkParticles.length - 1; i >= 0; i--) {
+        const p = this.sparkParticles[i];
+        p.life -= deltaSeconds;
+        if (p.life <= 0) {
+          this.effectsLayer.remove(p.mesh);
+          if (p.mesh.geometry) p.mesh.geometry.dispose();
+          if (p.mesh.material) p.mesh.material.dispose();
+          this.sparkParticles.splice(i, 1);
+        } else {
+          p.mesh.position.addScaledVector(p.vel, deltaSeconds);
+          p.vel.y -= 9.8 * deltaSeconds;
+        }
       }
     }
 
+    // Smart On-Demand Rendering: skip WebGL render completely when scene is idle (0% GPU/CPU waste!)
+    if (!this.needsRender && !hasActiveAnim) {
+      return;
+    }
+
     this.renderer.render(this.scene, this.camera);
+    this.needsRender = false;
   }
 }
