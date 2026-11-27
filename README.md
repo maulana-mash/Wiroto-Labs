@@ -1,58 +1,69 @@
-# Wiroto Labs — Virtual Automotive Electrical & AC 3D Simulator
+<p align="center">
+  <a href="https://github.com/maulana-mash/Wiroto-Labs">
+    <img src="assets/logo.png" alt="Logo Wiroto Labs" width="150" />
+  </a>
+</p>
+
+<h1 align="center">Wiroto Labs</h1>
 
 <p align="center">
-  <img src="assets/logo.png" alt="Wiroto Labs Logo" width="160" style="border-radius: 20px; filter: drop-shadow(0 8px 24px rgba(2, 132, 199, 0.35));" />
+  <strong>Simulator 3D Trainer Kelistrikan Bodi Otomotif &amp; Sistem AC Mobil (R134a)</strong><br />
+  Platform praktikum virtual otomotif berbasis Three.js WebGL 60 FPS yang mereplikasi meja trainer bengkel SMK Teknik Kendaraan Ringan (TKR) lengkap dengan fisika kabel nyata, multimeter digital True RMS, proteksi sekring, dan 10 modul kurikulum terstandar.
 </p>
 
 <p align="center">
-  <b>Platform Simulator Trainer Kelistrikan Bodi Otomotif &amp; Sistem AC Mobil (R134a) 3D Interaktif</b><br>
-  <i>Dirancang khusus untuk pembelajaran teknik vokasi SMK Teknik Kendaraan Ringan (TKR) dan Pendidikan Teknik Otomotif.</i>
+  <img src="https://img.shields.io/badge/WEBGL-THREE.JS%20r160-18181b?style=for-the-badge&logo=three.js&logoColor=white&labelColor=333333" alt="Three.js r160" />
+  <img src="https://img.shields.io/badge/PERFORMA-60%20FPS%20LOCKED-18181b?style=for-the-badge&labelColor=333333" alt="60 FPS" />
+  <img src="https://img.shields.io/badge/MODUL-10%20KURIKULUM%20TKR-18181b?style=for-the-badge&labelColor=333333" alt="10 Modul Kurikulum" />
+  <img src="https://img.shields.io/badge/TEST-17%2F17%20PASSED-18181b?style=for-the-badge&labelColor=333333" alt="17/17 Tests Passed" />
+  <img src="https://img.shields.io/badge/LISENSI-MIT-18181b?style=for-the-badge&labelColor=333333" alt="Lisensi MIT" />
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/WebGL-Three.js%20r160-000000?style=flat-square&logo=three.js&logoColor=white" alt="Three.js" />
-  <img src="https://img.shields.io/badge/Performance-60%20FPS%20Locked-10B981?style=flat-square" alt="60 FPS" />
-  <img src="https://img.shields.io/badge/Modules-10%20Curriculum%20Figures-3B82F6?style=flat-square" alt="10 Modules" />
-  <img src="https://img.shields.io/badge/Tests-17%2F17%20Passed-059669?style=flat-square" alt="Tests" />
-  <img src="https://img.shields.io/badge/Platform-Web%20%7C%20Windows%20Desktop-6366F1?style=flat-square" alt="Platform" />
-  <img src="https://img.shields.io/badge/License-MIT-F59E0B?style=flat-square" alt="MIT License" />
+  <a href="#pratinjau-antarmuka">Pratinjau</a> &bull;
+  <a href="#fitur-unggulan">Fitur Unggulan</a> &bull;
+  <a href="#10-modul-praktikum-kurikulum-terstandar">10 Modul</a> &bull;
+  <a href="#arsitektur-sistem">Arsitektur</a> &bull;
+  <a href="#cara-menjalankan">Cara Menjalankan</a> &bull;
+  <a href="#lisensi">Lisensi</a>
+</p>
+
+---
+
+## Pratinjau Antarmuka
+
+<p align="center">
+  <img src="assets/screenshots/wiroto-labs-3d.png" alt="Pratinjau Meja Trainer Kelistrikan Bodi Otomotif 3D Wiroto Labs" width="840" />
+</p>
+
+<p align="center">
+  <sub>Tampilan ruang praktikum 3D Wiroto Labs: 10 modul kurikulum di panel kiri, papan trainer interaktif ber-pin terminal, aki 12V, multimeter digital, rak kabel gantung, serta pemilih panjang kabel.</sub>
 </p>
 
 ---
 
 ## Tentang Wiroto Labs
 
-Wiroto Labs adalah media pembelajaran praktikum virtual otomotif berbasis web 3D yang menghadirkan pengalaman merangkai kabel (*wiring harness*) trainer fisik secara nyata ke dalam browser tanpa memerlukan instalasi aplikasi berat.
+**Wiroto Labs** adalah media pembelajaran praktikum virtual otomotif berbasis web 3D yang menghadirkan pengalaman merangkai kabel (*wiring harness*) trainer fisik secara nyata ke dalam peramban tanpa instalasi aplikasi berat.
 
-Dikembangkan berdasarkan standar kurikulum Teknik Kendaraan Ringan (TKR), simulator ini mereplikasi secara presisi meja trainer bengkel sekolah, lengkap dengan rak kabel gantung, aki 12V independen, multimeter digital interaktif, mekanik penumpukan colokan (*stackable banana plug*), batas panjang fisik kabel (10 cm, 20 cm, 30 cm, 50 cm), serta pemutus sekring otomatis saat terjadi hubung singkat (*short circuit*).
+Dikembangkan berdasarkan standar kurikulum **SMK Teknik Kendaraan Ringan (TKR)** dan Pendidikan Teknik Otomotif, simulator ini mereplikasi meja trainer bengkel sekolah secara presisi: rak kabel gantung, aki 12V independen, multimeter digital interaktif, penumpukan colokan (*stackable banana plug*), batas panjang fisik kabel (10 cm, 20 cm, 30 cm, 50 cm), serta pemutus sekring otomatis saat hubung singkat.
 
 ---
 
 ## Fitur Unggulan
 
-### 1. Fisika Kabel Nyata & Stackable Banana Plug
-- Batas Jangkauan Kabel Fisik: Siswa memilih ukuran panjang kabel (10 cm, 20 cm, 30 cm, 50 cm, dan Kabel Jepit Buaya Aki). Jika jarak antar-pin melebihi batas panjang kabel, simulator akan menolak koneksi dan memberi tahu jarak aktual dalam satuan sentimeter.
-- Mekanik Penumpukan Pin (Stacking): Meniru soket banana plug nyata di bengkel. Siswa dapat menumpuk beberapa colokan kabel pada terminal perantara yang sama (misalnya terminal 30 atau terminal massa 31) untuk mencabangkan arus listrik.
-- Lengkungan Alami Gravitasi (Catenary Sag): Kabel digantung menggunakan kurva Catmull-Rom parametrik yang melengkung secara fleksibel dan rapi di depan papan tanpa pernah menembus meja atau instrumen trainer.
-
-### 2. Solver Sirkuit DC Real-Time & Efek Suara Dinamis
-- Simulasi Aliran Arus 12V DC Presisi: Menghitung jatuh tegangan (*voltage drop*), hambatan resistor blower, aktivasi koil relay elektromagnetik, dan interlock pengaman secara deterministik.
-- Proteksi Hubung Singkat (Short Circuit Protection): Jika kutub positif baterai dihubungkan langsung ke massa tanpa melewati beban, sekring (*fuse*) seketika putus disertai percikan api partikel 3D dan indikasi visual sekring terbakar.
-- Mesin Suara Audio Sintesis (Web Audio API): Dilengkapi efek suara klakson kendaraan, *clicking* relay mekanis, *ticking* flasher sein, putaran dinamis blower AC berkecepatan 3-tingkat, dan klik magnetik *clutch* kompresor tanpa ketergantungan aset file audio eksternal.
-
-### 3. Digital Multimeter Terintegrasi (CAT III 600V True RMS)
-- Mengukur tegangan DC (DC V), resistansi (Ohm), uji kontinuitas bel dengung (Continuity Buzzer), dan arus (DC A).
-- Dilengkapi kabel probe Merah (+) dan Hitam (COM) yang dapat ditancapkan ke pin terminal mana pun pada papan atau aki, dengan tampilan layar LCD digital presisi serta unit fisik 3D di atas meja.
-
-### 4. Trainer Sistem AC Mobil Lengkap (R134a)
-- Siklus Refrigerasi Terintegrasi: Mensimulasikan kompresor AC berpuli, magnetic clutch, kondensor & kipas ekstra (*extra fan*), receiver-drier dengan kaca pengintai (*sight glass*), katup ekspansi, dan evaporator louvered 4-ventilasi.
-- Dual Manifold Gauge: Menampilkan tekanan sisi rendah (*Low Pressure*) dan sisi tinggi (*High Pressure*) yang bergerak secara proporsional sesuai status kerja siklus refrigerasi.
-- Termometer Digital 3-Titik: Menampilkan suhu Ambient (T1), Evaporator Inlet (T2), dan hembusan ventilasi kabin Vent Discharge (T3) yang mendingin secara otomatis saat AC aktif.
-- Simulasi Hembusan Angin Dinamis: Garis angin aerodinamis tipis bergelombang pada sirip evaporator yang meningkat frekuensi dan kecepatannya mengikuti posisi saklar blower (1 - 2 - 3).
-
-### 5. 3D Component Inspector & Exploded View
-- Buka dan amati struktur internal komponen secara terpisah (Headlamp reflektor fluted, Relay transparan, Motor penggerak, dsb.).
-- Fitur Exploded View mengangkat seluruh rumah komponen 3D ke depan sumbu Z secara halus untuk memudahkan observasi arsitektur terminal di balik panel.
+1. **Fisika Kabel Nyata & Stackable Banana Plug:**
+   - **Batas Jangkauan Fisik:** Mendukung kabel 10 cm, 20 cm, 30 cm, 50 cm, dan kabel jepit buaya aki; menolak koneksi otomatis disertai jarak aktual (cm) apabila panjang kabel tidak mencukupi.
+   - **Penumpukan Pin (*Stacking*) & Lengkungan Gravitasi:** Beberapa colokan dapat ditumpuk pada satu terminal (misalnya terminal `30` atau massa `31`) dengan kurva parametrik Catmull-Rom yang melengkung alami.
+2. **Solver Sirkuit DC Real-Time & Efek Suara Web Audio API:**
+   - Menghitung jatuh tegangan (*voltage drop* terkalibrasi SAE J1128 / ISO 6722), hambatan resistor blower, aktivasi koil relay, dan proteksi hubung singkat dengan animasi percikan api 3D saat sekring putus.
+   - Sintesis suara klakson, klik relay, *flasher* sein, putaran blower AC 3-kecepatan, dan kopling magnet kompresor tanpa berkas audio eksternal.
+3. **Digital Multimeter Terintegrasi (CAT III 600V True RMS):**
+   - Mengukur tegangan DC (`DC V`), resistansi (`Ohm`), kontinuitas bel dengung (*Continuity Buzzer*), dan arus (`DC A`) menggunakan probe Merah (`+`) dan Hitam (`COM`).
+4. **Trainer Sistem AC Mobil Lengkap (R134a):**
+   - Kompresor AC berpuli, *magnetic clutch*, kondensor & *extra fan*, *receiver-drier* ber-*sight glass*, katup ekspansi, evaporator 4-ventilasi, *Dual Manifold Gauge*, termometer digital 3-titik (`T1`, `T2`, `T3`), dan visualisasi garis aliran angin dinamis.
+5. **3D Component Inspector & Exploded View:**
+   - Membedah komponen 3D internal (reflektor lampu kepala, relay transparan, motor penggerak) dan mengangkat seluruh rumah komponen secara halus untuk mengamati jalur terminal di balik panel.
 
 ---
 
@@ -60,16 +71,16 @@ Dikembangkan berdasarkan standar kurikulum Teknik Kendaraan Ringan (TKR), simula
 
 | Modul | Kategori | Topik Praktikum | Standar Kompetensi |
 | :---: | :--- | :--- | :--- |
-| **FIG. 00** | 1. Dasar Kelistrikan | **Dasar Kelistrikan & Multimeter** | Pengenalan polaritas aki 12V, pengukuran tegangan, hukum Ohm pada lampu, dan uji kontinuitas buzzer. |
-| **FIG. 01** | 2. Kelistrikan Bodi | **Sekring & Beban Tunggal** | Rangkaian pengaman sekring (blade fuse), saklar kontak, dan beban tunggal dengan proteksi arus lebih. |
-| **FIG. 02** | 2. Kelistrikan Bodi | **Relay 4-Kaki & Klakson** | Prinsip kerja relay elektromagnetik (`30-85-86-87`), kontrol saklar arus rendah, dan aktivasi klakson. |
-| **FIG. 03** | 2. Kelistrikan Bodi | **Lampu Kota & Lampu Rem** | Rangkaian lampu clearance/tail parallel ganda serta saklar pedal rem sesaat (*momentary brake switch*). |
-| **FIG. 04** | 2. Kelistrikan Bodi | **Lampu Kepala (Low & High Beam)** | Sistem lampu utama jauh/dekat dengan saklar kombinasi dimmer dan proteksi *dual relay*. |
-| **FIG. 05** | 2. Kelistrikan Bodi | **Lampu Sein & Lampu Hazard** | Rangkaian pengedip otomatis (*flasher* terminal `B-L-E`), saklar 3-arah kiri/kanan, dan saklar hazard simultan. |
-| **FIG. 06** | 2. Kelistrikan Bodi | **Full Trainer Kelistrikan Bodi** | Pengintegrasian seluruh sistem penerangan dan tanda bodi mobil dalam satu meja kerja utuh. |
-| **AC01** | 3. Sistem AC Mobil | **Kelistrikan Blower & Resistor** | Saklar rotary 4-posisi (0-1-2-3), resistor penurun tegangan, dan kecepatan hembusan udara evaporator. |
-| **AC02** | 3. Sistem AC Mobil | **Kelistrikan Magnetic Clutch** | Rangkaian interlock saklar AC tekan, pengatur suhu termostat, *dual pressure switch*, dan relay kopling magnet. |
-| **AC03** | 3. Sistem AC Mobil | **Full Trainer AC Mobil & Siklus R134a** | Integrasi lengkap kelistrikan kontrol AC, penggerak kompresor, manifold gauge, termometer kabin, dan aliran udara. |
+| **FIG. 00** | 1. Dasar Kelistrikan | **Dasar Kelistrikan & Multimeter** | Polaritas aki 12V, pengukuran tegangan, hukum Ohm pada lampu, dan uji kontinuitas buzzer. |
+| **FIG. 01** | 2. Kelistrikan Bodi | **Sekring & Beban Tunggal** | Rangkaian pengaman *blade fuse*, saklar kontak, dan beban tunggal berproteksi arus lebih. |
+| **FIG. 02** | 2. Kelistrikan Bodi | **Relay 4-Kaki & Klakson** | Prinsip relay elektromagnetik (`30-85-86-87`), kontrol saklar arus rendah, dan aktivasi klakson. |
+| **FIG. 03** | 2. Kelistrikan Bodi | **Lampu Kota & Lampu Rem** | Rangkaian lampu clearance/tail paralel ganda serta saklar pedal rem sesaat (*momentary*). |
+| **FIG. 04** | 2. Kelistrikan Bodi | **Lampu Kepala (Low & High Beam)** | Sistem lampu jauh/dekat dengan saklar kombinasi dimmer dan proteksi *dual relay*. |
+| **FIG. 05** | 2. Kelistrikan Bodi | **Lampu Sein & Lampu Hazard** | Rangkaian *flasher* terminal `B-L-E`, saklar 3-arah kiri/kanan, dan hazard simultan. |
+| **FIG. 06** | 2. Kelistrikan Bodi | **Full Trainer Kelistrikan Bodi** | Integrasi menyeluruh sistem penerangan dan tanda bodi mobil dalam satu meja kerja. |
+| **AC01** | 3. Sistem AC Mobil | **Kelistrikan Blower & Resistor** | Saklar rotary 4-posisi (`0-1-2-3`), resistor penurun tegangan, dan kecepatan hembusan evaporator. |
+| **AC02** | 3. Sistem AC Mobil | **Kelistrikan Magnetic Clutch** | Interlock saklar AC, termostat suhu, *dual pressure switch*, dan relay kopling magnet. |
+| **AC03** | 3. Sistem AC Mobil | **Full Trainer AC Mobil & Siklus R134a** | Integrasi kontrol AC, kompresor, *manifold gauge*, termometer kabin, dan aliran udara. |
 
 ---
 
@@ -115,82 +126,34 @@ graph TD
 
 ## Cara Menjalankan
 
-### Opsi 1: Akses Online di Browser (Vercel)
-Aplikasi telah dioptimalkan untuk berjalan secara statis di Vercel dengan *zero configuration*:
-- Hubungkan repositori ini ke akun [Vercel](https://vercel.com/) Anda.
-- Simulator langsung aktif di URL produksi Vercel dengan kecepatan penuh 60 FPS.
-
-### Opsi 2: Menjalankan Secara Lokal (Local Dev)
-1. Clone Repositori:
-   ```bash
-   git clone https://github.com/maulana-mash/Wiroto-Labs.git
-   cd Wiroto-Labs
-   ```
-2. Jalankan HTTP Server Lokal (Pilih salah satu):
-   - Menggunakan Python:
-     ```bash
-     python serve.py
-     ```
-   - Atau langsung klik ganda `run-browser.bat` di Windows Explorer.
-3. Buka browser pada alamat:
-   ```text
-   http://localhost:8085/
-   ```
-
-### Opsi 3: Mode Desktop Mandiri (Windows App)
-Klik ganda berkas:
-```text
-run-webview-app.bat
+### Opsi 1: Menjalankan Secara Lokal (Browser)
+```powershell
+git clone https://github.com/maulana-mash/Wiroto-Labs.git
+cd Wiroto-Labs
+python serve.py
+# atau klik ganda run-browser.bat di Windows Explorer
 ```
-Aplikasi akan langsung berjalan dalam jendela mandiri (*standalone window*) tanpa bilah alamat browser, ideal untuk komputer lab sekolah tanpa koneksi internet.
+Buka peramban dan akses `http://localhost:8085/`.
 
----
+### Opsi 2: Mode Aplikasi Desktop Mandiri (Windows)
+Klik ganda berkas `run-webview-app.bat` untuk menjalankan simulator dalam jendela mandiri tanpa bilah alamat browser — ideal untuk komputer laboratorium sekolah tanpa internet.
 
-## Pengujian Unit (Test Suite)
-
-Repositori ini dilengkapi dengan rangkaian pengujian unit otomatis menggunakan runner bawaan Node.js (`node:test`):
-
-```bash
+### Pengujian Unit (`17/17 Passed`)
+```powershell
 npm test
 ```
 
-Hasil verifikasi:
-```text
-[PASS] AC Modules (ac01, ac02, ac03) are registered in curriculum category (3.9ms)
-[PASS] ac01 Blower & Resistor: validates speeds 0-1-2-3 voltage drops (4.8ms)
-[PASS] ac02 Magnetic Clutch: validates series safety interlocks (1.3ms)
-[PASS] ac03 Full Trainer AC: integrates Blower, Clutch, Gauges, and Temps (36.4ms)
-[PASS] computePinDistanceCm converts 3D world distance using 2.5 cm per unit (1.4ms)
-[PASS] Cable options support 10, 20, 30, 50 cm with jumper-10 handling short connections (1.7ms)
-[PASS] validateCableConnection rejects cable when distance exceeds selected length (0.3ms)
-[PASS] validateCableConnection requires alligator clip on battery posts (0.3ms)
-[PASS] CableManager supports stacking multiple banana plugs on an intermediate pin (0.9ms)
-[PASS] MODULES defines all required automotive curriculum figures (0.4ms)
-[PASS] CircuitSolver energizes lamp via battery clips, ignition switch, and fuse (5.1ms)
-[PASS] CircuitSolver blows fuse immediately when +12V is wired to GND (0.9ms)
-[PASS] CircuitSolver activates 4-pin relay coil to close contact and sound horn (2.6ms)
-[PASS] All curriculum modules have valid demoWires that pass distance validation (1.8ms)
-[PASS] Fig. 00 12V Basic Electricity & Multimeter Lab simulates Ohm law and Buzzer (9.2ms)
-[PASS] UI files contain zero Unicode emojis and use pure inline SVG icons (35.1ms)
-[PASS] Fig. 06 Full Trainer simulates Horn, High/Low Beam, and Turn/Hazard (7.8ms)
+---
 
-tests 17 | pass 17 | fail 0 | duration_ms 196ms
-```
+## Tech Stack
+
+- **3D Graphics Engine:** Three.js (r160) WebGL dengan *InstancedMesh* batching, pencahayaan studio, dan *on-demand rendering* 60 FPS.
+- **Audio Synthesis:** Web Audio API tanpa ketergantungan berkas audio eksternal.
+- **UI & Styling:** CSS3 Design Tokens, tipografi *Plus Jakarta Sans* & *JetBrains Mono*, serta ikon inline SVG murni tanpa emoji.
+- **Deployment:** Hosting statis (`vercel.json`) & Windows WebView2 Desktop Runner.
 
 ---
 
-## Tumpukan Teknologi (Tech Stack)
+## Lisensi
 
-- 3D Graphics Engine: Three.js (r160) WebGL dengan pencahayaan studio, PCF Soft Shadows, dan optimasi *sub-10ms render frame rate*.
-- Camera Controls: OrbitControls dengan pembatas sudut polar agar kamera tidak menembus lantai atau meja.
-- Audio Synthesis: Web Audio API (*zero-audio-file dependency*) untuk simulasi suara relay, klakson, flasher, blower, dan kopling magnet.
-- Styling & UI: CSS3 Custom Properties (Design Tokens), Glassmorphism modern, Tipografi Plus Jakarta Sans & JetBrains Mono, dan ikon inline SVG murni tanpa emoji Unicode.
-- Deployment: Vercel Static Hosting (`vercel.json`) & Windows WebView2 Desktop Runner.
-
----
-
-## Kontributor & Lisensi
-
-- Penyusun & Pengembang: Maulana Mash & Tim Wiroto Labs
-- Institusi/Fokus: Pendidikan Teknik Otomotif & Vokasi Indonesia
-- Lisensi: Berlisensi MIT. Terbuka untuk digunakan di sekolah, kampus, dan pusat pelatihan vokasi secara bebas.
+Proyek ini dikembangkan oleh **Maulana Mash & Tim Wiroto Labs** dan dirilis di bawah lisensi **MIT** untuk digunakan secara bebas di sekolah, kampus, dan pusat pelatihan vokasi.
